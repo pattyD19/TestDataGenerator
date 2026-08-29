@@ -42,7 +42,7 @@ def cmd_build(args):
         since=datetime.fromisoformat(args.since) if args.since else None,
         until=datetime.fromisoformat(args.until) if args.until else None,
         job_id=args.job, seed=args.seed, preset=args.preset, jobs=args.jobs,
-        clip_seconds=(args.min_clip, args.max_clip),
+        clip_seconds=(args.min_clip, args.max_clip), restart=args.restart,
         progress=(lambda m: None) if args.quiet else print)
     dt = time.time() - started
     delta = doc["delta_bytes"]
@@ -163,6 +163,9 @@ def main(argv=None):
     g.add_argument("--max-clip", type=float, default=60)
     g.add_argument("--jobs", type=int, default=None,
                    help="parallel photo encoders (default: CPU count)")
+    g.add_argument("--restart", action="store_true",
+                   help="discard a partial build in --out and start over "
+                        "(a matching partial build is otherwise resumed)")
     g.add_argument("--quiet", action="store_true")
     g.set_defaults(fn=cmd_build)
 

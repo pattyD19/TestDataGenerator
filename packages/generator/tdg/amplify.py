@@ -90,6 +90,15 @@ def render_video(out_path, persona, when, index, job_id,
     """
     rng = _rng(job_id, index)
     abr = 128_000
+    # lavfi's `life` and `noise` both default their seed to -1, meaning "pick a
+    # random one at run time". Left alone they make every clip different on
+    # every run, and CBR hides it: the file size moves by only a few bytes, but
+    # the planner prices the next clip off that measured size, so the
+    # difference compounds into visibly different later clips. Seeding them
+    # from the per-item RNG is what makes --job + --seed actually reproducible
+    # for packs containing video.
+    noise_seed = rng.randrange(2 ** 31)
+    life_seed = rng.randrange(2 ** 32)
     common = [
         "-c:v", "libx264", "-preset", preset, "-pix_fmt", "yuv420p",
         "-b:v", str(bitrate), "-minrate", str(bitrate), "-maxrate", str(bitrate),
@@ -106,19 +115,27 @@ def render_video(out_path, persona, when, index, job_id,
         args = ["-ss", f"{start:.2f}", "-stream_loop", "-1", "-i", seed_clip,
                 "-f", "lavfi", "-i", f"sine=frequency={rng.randint(180, 700)}:sample_rate=48000",
                 "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-                       f"crop={width}:{height},noise=alls={rng.randint(6, 14)}:allf=t",
+                       f"crop={width}:{height},"
+                       f"noise=alls={rng.randint(6, 14)}:allf=t:all_seed={noise_seed}",
                 "-map", "0:v:0", "-map", "1:a:0", *common, out_path]
     else:
         # Synthetic source: structured motion plus grain encodes to a realistic
         # bitrate, unlike a flat test pattern which would undershoot wildly.
-        src = rng.choice([
-            f"mandelbrot=size={width}x{height}:rate=30",
-            f"testsrc2=size={width}x{height}:rate=30",
-            f"life=size={width}x{height}:rate=30:mold=10:ratio=0.1:death_color=#39523d:life_color=#c8b48a",
-        ])
+        # Only mandelbrot is reproducible. `testsrc2` and `testsrc` seed an
+        # internal PRNG from the clock with no way to override it, and `life`
+        # and `cellauto` stay random even when their documented seed option is
+        # set — all verified against ffmpeg 9. Variety therefore comes from
+        # varying the fractal itself, which is deterministic: a different
+        # region at a different zoom looks nothing like the last one and still
+        # carries the fine detail that keeps the encoder honest.
+        zoom, maxiter = rng.uniform(0.6, 3.2), rng.choice([80, 140, 220, 400])
+        src = (f"mandelbrot=size={width}x{height}:rate=30"
+               f":start_scale={zoom:.4f}:maxiter={maxiter}"
+               f":start_x={rng.uniform(-0.9, 0.4):.6f}"
+               f":start_y={rng.uniform(-0.9, 0.9):.6f}")
         args = ["-f", "lavfi", "-i", src,
                 "-f", "lavfi", "-i", f"sine=frequency={rng.randint(180, 700)}:sample_rate=48000",
-                "-vf", f"noise=alls={rng.randint(8, 18)}:allf=t",
+                "-vf", f"noise=alls={rng.randint(8, 18)}:allf=t:all_seed={noise_seed}",
                 *common, out_path]
     _ffmpeg(args)
     set_mtime(out_path, when)

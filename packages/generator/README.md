@@ -53,7 +53,7 @@ totals a loader checks against free space *before* writing anything.
 | `--profile` | `iphone-15-pro`, `pixel-8`, `galaxy-s24`, `galaxy-a54`. Sets camera make/model, resolutions, JPEG quality band and video mode. |
 | `--photo-fraction` | Share of *bytes* that are stills (default 0.70). File **count** follows from this — 26,000 small files stress a backup client very differently from 200 large ones. |
 | `--since` / `--until` | Capture-date range. Dates are clustered into bursts with a background sprinkle, because a uniform sprinkle makes every date-grouping feature look identical. |
-| `--job` + `--seed` | Same values produce the same pack, byte for byte. A failing test stays re-runnable. |
+| `--job` + `--seed` | Same values produce the same pack, byte for byte — video included. A failing test stays re-runnable. |
 | `--jobs` | Parallel photo encoders; defaults to CPU count. |
 | `--preset` | x264 preset. `ultrafast` keeps large packs practical; `medium` if you care about how the video actually looks. |
 
@@ -105,6 +105,34 @@ Each receipt line stores the handle that deletes that asset: a host path for
 `--erase-device` is verified: a 39-asset load was erased back to the runtime's
 stock 6 photos and the device booted normally afterwards.
 
+## Interrupted builds resume
+
+A 64 GB pack is one to two hours of CPU. Re-running the same `build` command
+picks up where it left off; nothing extra to pass.
+
+```bash
+python3 -m tdg.cli build --size 64GB --out ./pack   # ^C, closed laptop, OOM
+python3 -m tdg.cli build --size 64GB --out ./pack   # carries on
+python3 -m tdg.cli build --size 64GB --out ./pack --restart   # or start over
+```
+
+A resumed pack is **byte-for-byte the pack an uninterrupted run would have
+made**. That takes more than remembering which files exist: the planner learns
+the encoder's real bytes-per-second as it goes and draws from a seeded RNG
+whose position determines every later file, so the checkpoint carries the
+learned state and the RNG position too.
+
+Two files in the output directory hold it — `.tdg-build.jsonl` (one completed
+item per line) and `.tdg-build.json` (the header). Items are flushed before the
+header that counts them is rewritten, so a kill at any instant leaves a header
+naming *fewer* items than the log holds, never more. Both are deleted when the
+manifest is written, so a finished pack never looks partial.
+
+Refusals are deliberate. A checkpoint whose settings do not match the current
+command is not resumed — that would produce a pack matching neither run — and
+neither is one whose recorded files have been deleted or truncated. Both say so
+and suggest `--restart` rather than guessing.
+
 ## Capture times carry a timezone
 
 EXIF `DateTimeOriginal` is a wall clock with no zone attached. An importer left
@@ -136,6 +164,7 @@ instant the manifest specified, photos and video alike.
 ```bash
 python3 packages/generator/tests/test_loader.py
 python3 packages/generator/tests/test_exif.py
+python3 packages/generator/tests/test_resume.py
 ```
 
 No third-party runner. The device targets are covered by fake `adb` and `xcrun`
@@ -177,9 +206,9 @@ passed it.
 
   Photo-only packs (`--photo-fraction 1.0`) run roughly twice as fast; x264
   dominates whenever video is in the mix.
-- Long builds must survive being interrupted. They currently do not resume;
-  `--job` + `--seed` reproduce a pack from scratch, which is not the same
-  thing. (`tdg load` *does* resume — it is `build` that does not.)
+- Resume granularity is the batch, not the file. An interrupted run loses at
+  most the photos that were in flight (`--jobs` × 4) or the single clip being
+  encoded — seconds to a couple of minutes of work, not hours.
 - The simulator and emulator paths have been exercised against the fakes, not
   yet against real Xcode or a real emulator. That first real run is the
   outstanding item for Phase 2.
