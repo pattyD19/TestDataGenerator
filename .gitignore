@@ -1,4 +1,8 @@
 seed-pool/
 out/
+pack/
 node_modules/
 *.pack/
+__pycache__/
+*.pyc
+.DS_Store

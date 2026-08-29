@@ -6,7 +6,7 @@ import sys
 import time
 from datetime import datetime
 
-from . import planner, sizing, synth
+from . import loader, planner, sizing, synth
 from .personas import PERSONAS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -33,8 +33,9 @@ def cmd_harvest(args):
 def cmd_build(args):
     target = sizing.parse_size(args.size)
     started = time.time()
-    print(f"Building {sizing.human(target)} pack "
-          f"[{args.profile}] -> {args.out}")
+    say = (lambda *a: None) if args.quiet else print
+    say(f"Building {sizing.human(target)} pack "
+        f"[{args.profile}] -> {args.out}")
     doc = planner.build_pack(
         args.out, args.seeds, target, persona_key=args.profile,
         photo_fraction=args.photo_fraction,
@@ -46,15 +47,15 @@ def cmd_build(args):
     dt = time.time() - started
     delta = doc["delta_bytes"]
     pct = 100 * delta / target if target else 0
-    print()
-    print(f"  job          {doc['job_id']}")
-    print(f"  files        {doc['file_count']}  "
-          f"({doc['photo_count']} photos, {doc['video_count']} videos)")
-    print(f"  target       {sizing.human(target)}")
-    print(f"  actual       {sizing.human(doc['total_bytes'])}  "
-          f"(delta {delta:+,} bytes, {pct:+.4f}%)")
-    print(f"  elapsed      {dt:,.1f}s  ({sizing.human(doc['total_bytes']/max(dt,.001))}/s)")
-    print(f"  manifest     {os.path.join(args.out, 'manifest.json')}")
+    say()
+    say(f"  job          {doc['job_id']}")
+    say(f"  files        {doc['file_count']}  "
+        f"({doc['photo_count']} photos, {doc['video_count']} videos)")
+    say(f"  target       {sizing.human(target)}")
+    say(f"  actual       {sizing.human(doc['total_bytes'])}  "
+        f"(delta {delta:+,} bytes, {pct:+.4f}%)")
+    say(f"  elapsed      {dt:,.1f}s  ({sizing.human(doc['total_bytes']/max(dt,.001))}/s)")
+    say(f"  manifest     {os.path.join(args.out, 'manifest.json')}")
 
 
 def cmd_inspect(args):
@@ -73,6 +74,57 @@ def cmd_inspect(args):
     print(f"prefix {doc['filename_prefix']}   album {doc['album']!r}")
     hashes = {i["sha256"] for i in doc["items"]}
     print(f"unique checksums: {len(hashes)} / {len(doc['items'])}")
+
+
+def cmd_load(args):
+    loader.load(args.pack, args.target, device=args.device, dest=args.dest,
+                force=args.force, dry_run=args.dry_run, limit=args.limit,
+                verify=args.verify,
+                progress=(lambda m: None) if args.quiet else print)
+
+
+def cmd_wipe(args):
+    loader.wipe(job_id=args.job, target=args.target, device=args.device,
+                dry_run=args.dry_run, erase_device=args.erase_device)
+
+
+def cmd_devices(args):
+    def probe(fn):
+        # One missing toolchain must not hide the other platform's devices.
+        try:
+            return fn(), None
+        except (SystemExit, RuntimeError) as exc:
+            return [], str(exc)
+
+    sims, sim_err = probe(loader.booted_simulators)
+    print("booted simulators:")
+    for s in sims:
+        print(f"  {s['udid']}  {s['name']}  ({s['runtime']})")
+    if not sims:
+        print("  " + "\n  ".join((sim_err or "none").splitlines()))
+
+    devs, adb_err = probe(loader.adb_devices)
+    print("adb devices:")
+    for d in devs:
+        print(f"  {d['serial']}  {d['desc']}")
+    if not devs:
+        print("  " + "\n  ".join((adb_err or "none").splitlines()))
+
+
+def cmd_receipts(args):
+    docs = loader.find_receipts(args.job, args.target, args.device)
+    if not docs:
+        print(f"no receipts in {loader.receipts_dir()}")
+        return
+    for d in docs:
+        ok = sum(1 for e in d["entries"] if e.get("ok"))
+        print(f"{d['job_id']}  {d['target']}"
+              + (f" {d['device']}" if d.get("device") else "")
+              + f"  {ok}/{len(d['entries'])} files"
+              + (f"  {sizing.human(d['bytes_loaded'])}" if d.get("bytes_loaded") else "")
+              + f"  {d.get('loaded_at') or 'incomplete'}")
+        if d.get("dest"):
+            print(f"    -> {d['dest']}")
 
 
 def main(argv=None):
@@ -118,8 +170,50 @@ def main(argv=None):
     i.add_argument("pack")
     i.set_defaults(fn=cmd_inspect)
 
+    l = sub.add_parser("load", help="push a pack onto a folder, simulator or emulator")
+    l.add_argument("--pack", required=True, help="a directory built by `tdg build`")
+    l.add_argument("--target", required=True, choices=loader.TARGETS)
+    l.add_argument("--device", help="simulator udid (or 'booted') / adb serial")
+    l.add_argument("--dest", help="folder target: destination dir. "
+                                  "emulator: remote dir, default /sdcard/DCIM/TDG_<job>")
+    l.add_argument("--force", action="store_true",
+                   help="re-send files the receipt says are already there")
+    l.add_argument("--limit", type=int, help="stop after N files (smoke tests)")
+    l.add_argument("--verify", action="store_true",
+                   help="re-hash what landed (folder and emulator only)")
+    l.add_argument("--dry-run", action="store_true",
+                   help="preflight only: resolve device, check free space, write nothing")
+    l.add_argument("--quiet", action="store_true")
+    l.set_defaults(fn=cmd_load)
+
+    w = sub.add_parser("wipe", help="remove a previously loaded pack, using its receipt")
+    w.add_argument("--job", help="job id; default every recorded job")
+    w.add_argument("--target", choices=loader.TARGETS)
+    w.add_argument("--device")
+    w.add_argument("--dry-run", action="store_true")
+    w.add_argument("--erase-device", action="store_true",
+                   help="simulator only: erase the WHOLE simulator, since simctl "
+                        "cannot delete individual assets")
+    w.set_defaults(fn=cmd_wipe)
+
+    d = sub.add_parser("devices", help="what simulators and adb devices are reachable")
+    d.set_defaults(fn=cmd_devices)
+
+    r = sub.add_parser("receipts", help="what has been loaded where")
+    r.add_argument("--job")
+    r.add_argument("--target", choices=loader.TARGETS)
+    r.add_argument("--device")
+    r.set_defaults(fn=cmd_receipts)
+
     args = p.parse_args(argv)
-    return args.fn(args)
+    try:
+        return args.fn(args)
+    except RuntimeError as exc:
+        # An external tool (adb, ffmpeg, simctl) refused. The message from the
+        # tool is the useful part; a Python traceback is not.
+        raise SystemExit(str(exc))
+    except KeyboardInterrupt:
+        raise SystemExit("\ninterrupted. Re-run the same command to resume.")
 
 
 if __name__ == "__main__":

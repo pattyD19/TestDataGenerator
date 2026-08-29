@@ -141,14 +141,29 @@ slow and expensive; the same box can serve every device in the lab.
 
 Filling a device is easy; *un*-filling it reliably is what makes the tool usable daily.
 
-- Every file named `TDG_<jobId>_<seq>.<ext>`
-- Every asset placed in a dedicated album (`TDG <jobId>`)
+- Every file named `TDG_<jobId>_<seq>.<ext>`, and every asset placed in a dedicated
+  album (`TDG <jobId>`) — but **neither is the deletion mechanism.** Verified
+  2026-08-29: iOS renames every imported asset to `IMG_NNNN`, so the filename does
+  not survive an import and nothing may key off it.
+- **The receipt is the deletion mechanism.** The loader records a handle for every
+  asset it wrote and never touches anything else. The handle is per-target: an
+  absolute path for `folder`, a device path for `emulator`, and the `PHAsset`
+  `localIdentifier` for the iOS app. That is what makes the filename question moot.
 - `tdg wipe --job <id>` on each loader. Because the loader **owns** every file it wrote,
   Android can delete them with no storage permission at all — `MediaStore.createDeleteRequest`
   is only needed for files the app doesn't own. iOS uses `PHAssetChangeRequest.deleteAssets`
-  (one system confirmation per batch).
-- Loader keeps a local receipt of exactly what it wrote, so wipe works even if the
-  generator is gone
+  on the recorded identifiers (one system confirmation per batch).
+- The receipt lives outside the pack, so wipe works even if the generator and the
+  pack are both gone.
+
+**Deletion status per target, as actually tested:**
+
+| Target | Delete individual assets? | How |
+|---|---|---|
+| `folder` | yes | unlink the recorded paths — verified |
+| `emulator` | yes | `adb shell rm` + re-scan so MediaStore drops the rows |
+| `simulator` | **no** | simctl has no delete-media verb (confirmed against Xcode 26.6). `simctl erase` is the only route and resets the whole device — verified working, device reusable after. Acceptable because a simulator is disposable. |
+| iOS device (Phase 5) | yes | `PHAssetChangeRequest.deleteAssets` on recorded `localIdentifier`s — **not yet built or proven; this is the one deletion path still owed a real test.** |
 
 ---
 
@@ -206,7 +221,7 @@ devices rather than a dozen, so this is days rather than a week. Results live in
 |---|---|---|
 | **0. Spike** | Prove the two risky bits: 500 assets into iOS Photos via `PHAssetCreationRequest` with correct `creationDate`, and 500 into Android MediaStore with correct `DATE_TAKEN`. Nothing else matters if these are slow or lossy. | 2–3 days |
 | **1. CLI generator** ✅ | `tdg build --size 25GB --profile iphone-15-pro --out ./pack` → folder + `manifest.json` + `LICENSES.csv`. Amplifier, exact-size planner, hand-rolled EXIF writer, synthetic bootstrap seed pool, harvester written. **JPEG + MP4 only.** Built and verified 2026-08-29 — see `packages/generator/`. | done |
-| **2. Desktop & CI loaders** | `tdg load --target simulator\|emulator\|folder`. Wraps `simctl addmedia` and `adb push` + media scan. Useful in CI on day one, before any mobile app exists. | 3–4 days |
+| **2. Desktop & CI loaders** ✅ | `tdg load --target simulator\|emulator\|folder`. Wraps `simctl addmedia` and `adb push` + media scan. Free-space preflight, resumable receipts stored outside the pack, `tdg wipe`, `tdg devices`, `tdg receipts`. Fake `adb`/`xcrun` fixtures so both device paths are testable with no device attached. Built 2026-08-29 — see `packages/generator/tdg/loader.py`. | done |
 | **3. Web control plane** | React/Next front end + generator API. Presets, job creation, QR pairing, live progress, LAN mode. This is the thing you actually asked for. | 2 weeks |
 | **4. Android loader** | Kotlin, minSdk 30, single screen: scan QR → stream manifest → `MediaStore.insert()` with `IS_PENDING` → set `DATE_TAKEN`/`RELATIVE_PATH`. **Foreground service + resumable receipts.** Plus wipe. Internal APK. Pixel first, then Samsung. | 1 week |
 | **5. iOS loader** | SwiftUI, iOS 17 floor, same flow → batched `PHAssetCreationRequest` (≈100–200 per `performChanges` transaction; one big transaction will stall). Plus wipe. TestFlight internal. | 1.5–2 weeks |
