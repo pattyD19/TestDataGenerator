@@ -105,6 +105,23 @@ Each receipt line stores the handle that deletes that asset: a host path for
 `--erase-device` is verified: a 39-asset load was erased back to the runtime's
 stock 6 photos and the device booted normally afterwards.
 
+### Verified against real devices
+
+Not just the fakes. Both device targets have been run end to end:
+
+| | iPhone 17 Pro simulator (Xcode 26.6, iOS 26.5) | Pixel 9 emulator (Android 17, API 37, arm64) |
+|---|---|---|
+| import | 14 assets at 66 MB/s via `addmedia` | 39 assets at 4.2 MB/s via `adb push` |
+| indexed | 14/14 in the Photos database | 39/39 in MediaStore (37 images, 2 videos) |
+| capture time | exact instant, photos and video alike | `DATE_TAKEN` matched the manifest to under a second |
+| checksums | n/a (Photos re-encodes the container) | 39/39 verified by `sha256sum` on device |
+| wipe | erase only — no per-asset delete exists | files, directory and MediaStore rows all gone |
+
+The Android numbers are the interesting ones: a pushed file that is never
+scanned is invisible, and a deleted file that is never re-scanned leaves a dead
+row behind. Both were checked by querying MediaStore directly rather than by
+trusting the exit code.
+
 ## Interrupted builds resume
 
 A 64 GB pack is one to two hours of CPU. Re-running the same `build` command
@@ -209,6 +226,10 @@ passed it.
 - Resume granularity is the batch, not the file. An interrupted run loses at
   most the photos that were in flight (`--jobs` × 4) or the single clip being
   encoded — seconds to a couple of minutes of work, not hours.
-- The simulator and emulator paths have been exercised against the fakes, not
-  yet against real Xcode or a real emulator. That first real run is the
-  outstanding item for Phase 2.
+- Real-device throughput is bounded by the transfer, not the encode: `adb push`
+  to an emulator ran at 4.2 MB/s, so a 64 GB fill over adb is hours. Wi-Fi to a
+  handset on the LAN is the faster path, and the reason the generator is meant
+  to run on the LAN rather than in the cloud.
+- Verified for real on both device targets (see below). The remaining unproven
+  path is deletion on a **physical iPhone**, which needs the Phase 5 loader app
+  that does not exist yet.

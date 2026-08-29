@@ -161,7 +161,7 @@ Filling a device is easy; *un*-filling it reliably is what makes the tool usable
 | Target | Delete individual assets? | How |
 |---|---|---|
 | `folder` | yes | unlink the recorded paths — verified |
-| `emulator` | yes | `adb shell rm` + re-scan so MediaStore drops the rows |
+| `emulator` | yes | `adb shell rm` + re-scan so MediaStore drops the rows — verified on Android 17: files, directory and rows all gone |
 | `simulator` | **no** | simctl has no delete-media verb (confirmed against Xcode 26.6). `simctl erase` is the only route and resets the whole device — verified working, device reusable after. Acceptable because a simulator is disposable. |
 | iOS device (Phase 5) | yes | `PHAssetChangeRequest.deleteAssets` on recorded `localIdentifier`s — **not yet built or proven; this is the one deletion path still owed a real test.** |
 
@@ -221,7 +221,7 @@ devices rather than a dozen, so this is days rather than a week. Results live in
 |---|---|---|
 | **0. Spike** | Prove the two risky bits: 500 assets into iOS Photos via `PHAssetCreationRequest` with correct `creationDate`, and 500 into Android MediaStore with correct `DATE_TAKEN`. Nothing else matters if these are slow or lossy. | 2–3 days |
 | **1. CLI generator** ✅ | `tdg build --size 25GB --profile iphone-15-pro --out ./pack` → folder + `manifest.json` + `LICENSES.csv`. Amplifier, exact-size planner, hand-rolled EXIF writer, synthetic bootstrap seed pool, harvester written. **JPEG + MP4 only.** Built and verified 2026-08-29 — see `packages/generator/`. | done |
-| **2. Desktop & CI loaders** ✅ | `tdg load --target simulator\|emulator\|folder`. Wraps `simctl addmedia` and `adb push` + media scan. Free-space preflight, resumable receipts stored outside the pack, `tdg wipe`, `tdg devices`, `tdg receipts`. Fake `adb`/`xcrun` fixtures so both device paths are testable with no device attached. Built 2026-08-29 — see `packages/generator/tdg/loader.py`. | done |
+| **2. Desktop & CI loaders** ✅ | `tdg load --target simulator\|emulator\|folder`. Wraps `simctl addmedia` and `adb push` + media scan. Free-space preflight, resumable receipts stored outside the pack, `tdg wipe`, `tdg devices`, `tdg receipts`. Fake `adb`/`xcrun` fixtures so both device paths are testable with no device attached. Built 2026-08-29 and verified for real on an iPhone 17 Pro simulator (iOS 26.5) and a Pixel 9 emulator (Android 17): every asset indexed, capture times exact, wipe clean on both — see `packages/generator/tdg/loader.py`. | done |
 | **3. Web control plane** | React/Next front end + generator API. Presets, job creation, QR pairing, live progress, LAN mode. This is the thing you actually asked for. | 2 weeks |
 | **4. Android loader** | Kotlin, minSdk 30, single screen: scan QR → stream manifest → `MediaStore.insert()` with `IS_PENDING` → set `DATE_TAKEN`/`RELATIVE_PATH`. **Foreground service + resumable receipts.** Plus wipe. Internal APK. Pixel first, then Samsung. | 1 week |
 | **5. iOS loader** | SwiftUI, iOS 17 floor, same flow → batched `PHAssetCreationRequest` (≈100–200 per `performChanges` transaction; one big transaction will stall). Plus wipe. TestFlight internal. | 1.5–2 weeks |
