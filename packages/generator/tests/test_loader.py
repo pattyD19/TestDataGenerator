@@ -144,10 +144,12 @@ def main():
     os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
 
     r = loader.load(pack, "emulator", progress=quiet)
-    remote = f"/sdcard/DCIM/TDG_{doc['job_id']}"
+    remote = f"/sdcard/DCIM/{doc['album']}"   # the album the manifest declares
     landed = os.listdir(os.path.join(tmp, "device", remote.lstrip("/")))
     check(set(landed) == {i["name"] for i in doc["items"]}, "every file reached the device")
-    check(r["dest"] == remote, f"default remote dir is {remote}")
+    check(r["dest"] == remote,
+          f"the CLI files a pack under the manifest's album ({remote}), "
+          "so it agrees with the Android app")
 
     log = open(os.path.join(tmp, "adb.log")).read()
     scanned = sum(1 for i in doc["items"] if f"--arg '{remote}/{i['name']}'" in log)
@@ -172,6 +174,42 @@ def main():
     log2 = open(os.path.join(tmp, "adb2.log")).read()
     check(log2.count("scan_file") >= doc["file_count"] * 2,
           "deleted paths were re-scanned so MediaStore drops the rows")
+
+    # ---- tdg verify -------------------------------------------------------
+    # The harness asks the *device* what it indexed rather than trusting the
+    # loader's own success report, so it has to be exercised against something
+    # that can answer.
+    print("tdg verify")
+    from tdg import verify as vmod
+
+    dest2 = os.path.join(tmp, "vdest")
+    rf = loader.load(pack, "folder", dest=dest2, progress=quiet)
+    rep = vmod.verify(pack, "folder")
+    check(rep["passed"], "folder verify passes after a good load")
+    check(rep["indexed"] == doc["file_count"],
+          f"folder verify counts every asset ({rep['indexed']}/{doc['file_count']})")
+    check(rep["capture_time_preserved"] == doc["file_count"],
+          "and finds every capture time intact")
+
+    victim = os.path.join(dest2, doc["items"][0]["name"])
+    os.remove(victim)
+    rep = vmod.verify(pack, "folder")
+    check(not rep["passed"], "verify fails when an asset is missing from the device")
+    check(doc["items"][0]["name"] in rep["missing"],
+          "and names the asset that went astray")
+    loader.wipe(job_id="testjob", target="folder", progress=quiet)
+
+    # The device was wiped a few steps ago, so put the pack back first.
+    loader.load(pack, "emulator", force=True, progress=quiet)
+    rep = vmod.verify(pack, "emulator")
+    check(rep["indexed"] == doc["file_count"],
+          f"emulator verify reads MediaStore ({rep['indexed']}/{doc['file_count']})")
+    check(rep["capture_time_preserved"] == doc["file_count"],
+          "and DATE_TAKEN matches the manifest")
+    check(rep["album"] and doc["album"] in rep["album"],
+          f"and the album is the manifest's ({rep['album']})")
+    check(vmod.markdown(rep).startswith("# Conformance"),
+          "a markdown report is produced for docs/conformance/")
 
     # ---- shell command length ---------------------------------------------
     # adb hands the whole string to the device's shell, whose length limit is

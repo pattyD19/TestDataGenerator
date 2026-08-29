@@ -6,7 +6,7 @@ import sys
 import time
 from datetime import datetime
 
-from . import loader, planner, sizing, synth
+from . import loader, planner, sizing, synth, verify as verify_mod
 from .personas import PERSONAS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -127,6 +127,23 @@ def cmd_receipts(args):
             print(f"    -> {d['dest']}")
 
 
+def cmd_verify(args):
+    report = verify_mod.verify(args.pack, args.target, device=args.device)
+    print(verify_mod.summarise(report))
+    if args.json:
+        os.makedirs(os.path.dirname(os.path.abspath(args.json)), exist_ok=True)
+        with open(args.json, "w") as fh:
+            json.dump(report, fh, indent=2)
+        print(f"\n  json     {args.json}")
+    if args.out:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        with open(args.out, "w") as fh:
+            fh.write(verify_mod.markdown(report, args.label))
+        print(f"  report   {args.out}")
+    # A conformance run that fails should fail the shell too, so CI notices.
+    return 0 if report["passed"] else 1
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tdg", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -201,6 +218,15 @@ def main(argv=None):
 
     d = sub.add_parser("devices", help="what simulators and adb devices are reachable")
     d.set_defaults(fn=cmd_devices)
+
+    v = sub.add_parser("verify", help="ask the device what the gallery actually indexed")
+    v.add_argument("--pack", required=True)
+    v.add_argument("--target", required=True, choices=loader.TARGETS)
+    v.add_argument("--device")
+    v.add_argument("--label", help="device name for the report heading")
+    v.add_argument("--out", help="write a markdown report here, e.g. docs/conformance/pixel.md")
+    v.add_argument("--json", help="write the raw numbers here")
+    v.set_defaults(fn=cmd_verify)
 
     r = sub.add_parser("receipts", help="what has been loaded where")
     r.add_argument("--job")

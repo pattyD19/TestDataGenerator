@@ -1,0 +1,22 @@
+{
+  "job_id": "conf02",
+  "target": "simulator",
+  "device": "EB9C9A7F-1B3D-476E-9A2B-A36DD6986D4B",
+  "verified_at": "2026-08-29T22:14:57+00:00",
+  "expected_files": 20,
+  "expected_bytes": 94371840,
+  "photo_count": 19,
+  "video_count": 1,
+  "indexed": 20,
+  "missing": [],
+  "capture_time_preserved": 20,
+  "worst_delta_seconds": 0.972,
+  "album": null,
+  "album_supported": false,
+  "album_note": "simctl addmedia cannot create albums; the iOS loader app does",
+  "expected_album": "TDG conf02",
+  "matched_by": "instant",
+  "elapsed_seconds": 1.41,
+  "throughput_bytes_per_second": 66930383.0,
+  "passed": true
+}

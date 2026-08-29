@@ -28,7 +28,7 @@ python3 -m tdg.cli wipe --job <id>
 - `clients/android` — Kotlin loader (MediaStore), builds with Gradle
 - `clients/ios` — SwiftUI loader (PHAssetCreationRequest), builds with xcodebuild
 - `seed-pool` — cached CC0/CC-BY source media + LICENSES.csv (gitignored, rebuilt by harvester)
-- `docs` — manifest schema, device personas, licensing notes
+- `docs/conformance` — what `tdg verify` found on each device
 
 ## Status
 
@@ -39,7 +39,7 @@ python3 -m tdg.cli wipe --job <id>
 | 3 | Web control plane | done |
 | 4 | Android loader app | done — verified on an Android 17 emulator, not yet a physical handset |
 | 5 | iOS loader app | done — verified on an iOS 26.5 simulator; no signing identity here, so untested on a physical iPhone |
-| 6 | Conformance harness | not started |
+| 6 | Conformance harness | harness done; 2 of 6 devices verified, both emulated |
 | 7 | HEIC/HEVC and realism | not started |
 
 ## The mark

@@ -17,6 +17,7 @@ resumes instead of starting over.
 """
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import time
@@ -42,6 +43,18 @@ SCAN_BATCH = 50
 # well as by count. Long filenames therefore shrink the batch instead of
 # producing a truncated command that silently skips files.
 MAX_SHELL_CHARS = 3000
+
+
+def _q(path):
+    """Quote a device path for `adb shell`.
+
+    adb joins the argv it is given into a single string and hands that to the
+    device's shell, so a path containing a space arrives as two arguments. The
+    album name is user-visible in the gallery and reads far better as
+    "TDG abc123" than "TDG_abc123", so the paths get quoted rather than the
+    names getting mangled.
+    """
+    return shlex.quote(path)
 
 
 def _batches(items, count_cap, length_of=None, char_cap=MAX_SHELL_CHARS):
@@ -256,6 +269,9 @@ def _new_receipt(doc, pack_dir, target, device, dest):
         "filename_prefix": doc.get("filename_prefix"),
         "pack_dir": os.path.abspath(pack_dir),
         "loaded_at": None,
+        # Cumulative, so a load resumed after an interruption reports the total
+        # transfer time rather than only the last leg.
+        "elapsed_seconds": 0.0,
         "entries": [],
     }
 
@@ -273,7 +289,10 @@ def load(pack_dir, target, device=None, dest=None, force=False, dry_run=False,
             raise SystemExit("--target folder needs --dest <directory>")
         dest = os.path.abspath(os.path.expanduser(dest))
     elif target == "emulator":
-        dest = dest or f"/sdcard/DCIM/TDG_{doc['job_id']}"
+        # The album the manifest declares, so a pack loaded by this CLI and
+        # one loaded by the Android app land in the same place. They used to
+        # disagree — TDG_<job> here against TDG <job> there.
+        dest = dest or f"/sdcard/DCIM/{doc['album']}"
 
     rpath = receipt_path(doc["job_id"], target, device)
     receipt = read_receipt(rpath) or _new_receipt(doc, pack_dir, target, device, dest)
@@ -318,6 +337,8 @@ def load(pack_dir, target, device=None, dest=None, force=False, dry_run=False,
         by_name[e["name"]] = e
     receipt["entries"] = sorted(by_name.values(), key=lambda e: e["name"])
     receipt["loaded_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    receipt["elapsed_seconds"] = round(
+        receipt.get("elapsed_seconds", 0.0) + (time.time() - started), 2)
     written = sum(e["bytes"] for e in receipt["entries"] if e.get("ok"))
     receipt["bytes_loaded"] = written
     path = write_receipt(receipt)
@@ -395,7 +416,7 @@ def _load_emulator(pack_dir, items, dest, device, progress):
     old MEDIA_SCANNER_SCAN_FILE broadcast was removed in Android 10.
     """
     require_tool("adb", "install Android platform-tools")
-    adb(["shell", "mkdir", "-p", dest], device=device)
+    adb(["shell", "mkdir", "-p", _q(dest)], device=device)
     entries, done, pushed = [], 0, []
 
     for i in range(0, len(items), PUSH_BATCH):
@@ -449,13 +470,13 @@ def verify_load(pack_dir, receipt, progress=print):
                 bad.append(e)
     elif target == "emulator":
         for batch in _batches(entries, SCAN_BATCH, lambda e: len(e["dest"]) + 1):
-            p = adb(["shell", "sha256sum", *[e["dest"] for e in batch]],
+            p = adb(["shell", "sha256sum", *[_q(e["dest"]) for e in batch]],
                     device=device, check=False)
             got = {}
             for line in p.stdout.splitlines():
                 parts = line.split(None, 1)
                 if len(parts) == 2:
-                    got[parts[1].strip()] = parts[0].strip()
+                    got[parts[1].strip().strip("'")] = parts[0].strip()
             for e in batch:
                 if got.get(e["dest"]) != e["sha256"]:
                     bad.append(e)
@@ -512,14 +533,14 @@ def _wipe_one(receipt, dry_run, erase_device, progress):
         paths = [e["dest"] for e in entries]
         gone = 0
         for batch in _batches(paths, SCAN_BATCH, lambda p: len(p) + 1):
-            adb(["shell", "rm", "-f", *batch], device=device, check=False)
+            adb(["shell", "rm", "-f", *[_q(b) for b in batch]], device=device, check=False)
             gone += len(batch)
             progress(f"    deleted {gone}/{len(paths)}")
         # Re-scanning a path that no longer exists is how MediaStore is told to
         # drop the row; without it the gallery keeps showing dead thumbnails.
         scan_paths(paths, device, progress)
         if receipt.get("dest"):
-            adb(["shell", "rmdir", receipt["dest"]], device=device, check=False)
+            adb(["shell", "rmdir", _q(receipt["dest"])], device=device, check=False)
 
     elif t == "simulator":
         if not erase_device:

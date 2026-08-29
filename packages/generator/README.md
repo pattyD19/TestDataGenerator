@@ -176,6 +176,28 @@ The manifest records both `taken_at` (local, with offset) and `taken_at_utc`.
 Verified on an iPhone 17 Pro simulator: all 14 assets landed on the exact
 instant the manifest specified, photos and video alike.
 
+## Verifying a fill (`tdg verify`)
+
+A load reporting success only means the bytes were handed over. `tdg verify`
+asks the **device** what its gallery did with them:
+
+```bash
+tdg verify --pack ./pack --target emulator --out docs/conformance/pixel.md
+```
+
+Four checks — assets indexed, capture time preserved, album grouping, fill
+duration — printed, optionally written as markdown and JSON, and reflected in
+the exit code so a conformance run can gate CI.
+
+It is worth its keep: the first real run found that this CLI filed packs under
+`DCIM/TDG_<job>` while the Android app used `DCIM/TDG <job>`, so the same pack
+landed in two differently-named albums depending on which loader you used. The
+CLI now follows the manifest's album and quotes its remote paths.
+
+Verification is per-platform, and one gap is structural: a **physical iPhone**
+has no route in, because the Photos database is unreachable from outside the
+app. See [docs/conformance](../../docs/conformance/).
+
 ## Tests
 
 ```bash
