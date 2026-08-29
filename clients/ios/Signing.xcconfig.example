@@ -1,0 +1,9 @@
+// Copy to Signing.xcconfig and set your own team.
+//
+//   security find-identity -v -p codesigning
+//
+// prints "Apple Development: you@example.com (XXXXXXXXXX)"; the team ID is the
+// OU of that certificate, which Xcode also shows under Signing & Capabilities.
+//
+// Simulator builds ignore this entirely — they are not signed.
+TDG_DEVELOPMENT_TEAM =

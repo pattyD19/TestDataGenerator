@@ -18,5 +18,7 @@ clients/android/app/build/
 
 # iOS
 clients/ios/build/
+clients/ios/build-device/
 clients/ios/DerivedData/
 *.xcuserdatad
+clients/ios/Signing.xcconfig

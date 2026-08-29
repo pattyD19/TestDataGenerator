@@ -9,14 +9,55 @@ Phase 5 of [the plan](../../PLAN.md).
 
 ```bash
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-xcodebuild -project TdgLoader.xcodeproj -scheme TdgLoader \
-           -sdk iphonesimulator -configuration Debug -derivedDataPath build build
-xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/TdgLoader.app
 ```
 
 `DEVELOPER_DIR` is used rather than `xcode-select -s` because the latter needs an
 admin password. The project is hand-written and uses a file-system-synchronized
 group, so new Swift files in `TdgLoader/` are picked up with no project edit.
+
+### Simulator — no signing identity needed
+
+```bash
+xcodebuild -project TdgLoader.xcodeproj -scheme TdgLoader \
+           -sdk iphonesimulator -configuration Debug -derivedDataPath build build
+xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/TdgLoader.app
+```
+
+### Device
+
+```bash
+cp Signing.xcconfig.example Signing.xcconfig     # then put your team ID in it
+xcodebuild -project TdgLoader.xcodeproj -scheme TdgLoader \
+           -sdk iphoneos -configuration Debug -derivedDataPath build-device \
+           -allowProvisioningUpdates build
+```
+
+Signing is **per-SDK**, which is the point: the simulator builds unsigned so the
+project works on a machine with no certificate at all, while a device build uses
+a real identity. A blanket `CODE_SIGNING_ALLOWED = NO` would make the second
+impossible.
+
+| | simulator | device |
+|---|---|---|
+| `CODE_SIGNING_ALLOWED` | `NO` | `YES` |
+| `CODE_SIGN_IDENTITY` | `-` | `Apple Development` |
+| `DEVELOPMENT_TEAM` | ignored | from `Signing.xcconfig` |
+
+The team lives in `Signing.xcconfig`, which is **gitignored** — the project is
+not tied to one developer account, and moving it to an org team is editing one
+line rather than the project file. Copy `Signing.xcconfig.example` to start.
+
+Two things the first device build needs that no configuration can supply:
+
+- **`-allowProvisioningUpdates`**, or Xcode's UI. Without it the build stops at
+  *"No profiles for 'com.tdg.loader' were found"* — which is the expected and
+  correct failure, not a misconfiguration. This step **registers an App ID on
+  your developer account**, so run it deliberately.
+- **A device registered to the team.** Plug the iPhone in and let Xcode add it.
+
+If Apple rejects the App ID because `com.tdg.loader` is already taken globally,
+change `PRODUCT_BUNDLE_IDENTIFIER` to something under a domain you control.
+Bundle identifiers are unique across all of Apple, and this one is generic.
 
 ## Using it
 
@@ -85,10 +126,10 @@ iPhone 17 Pro simulator, **iOS 26.5**, 2026-08-29, against a 24-file pack
 
 ## Known limits
 
-- **Simulator only.** There are no signing identities on this machine, so the
-  app has never run on a physical iPhone and has not been near TestFlight.
-  A real device adds provisioning, a real Photos library, and iCloud Photos
-  syncing behaviour that a simulator does not model.
+- **Never run on a physical iPhone.** Signing is configured and a valid
+  identity now exists, but the app has only ever run on a simulator and has not
+  been near TestFlight. A real device adds a real Photos library and iCloud
+  Photos syncing behaviour that a simulator does not model.
 - **iOS 17 floor is declared, not verified.** `IPHONEOS_DEPLOYMENT_TARGET` is
   17.0 but the only runs are on 26.5.
 - **Deleted assets go to Recently Deleted for 30 days.** Space is not reclaimed
