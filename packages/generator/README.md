@@ -105,10 +105,37 @@ Each receipt line stores the handle that deletes that asset: a host path for
 `--erase-device` is verified: a 39-asset load was erased back to the runtime's
 stock 6 photos and the device booted normally afterwards.
 
+## Capture times carry a timezone
+
+EXIF `DateTimeOriginal` is a wall clock with no zone attached. An importer left
+to guess uses its own, so the same pack lands at a different absolute instant on
+every machine — and because MP4 stores an absolute instant rather than a local
+one, the videos in a pack would not move with the photos.
+
+So every capture time here is anchored to the timezone of the city its GPS
+points at, and that anchor is written down in four places that must agree:
+
+| | |
+|---|---|
+| `DateTimeOriginal` | local wall clock, as a camera writes it |
+| `OffsetTimeOriginal` (+ `OffsetTime`, `OffsetTimeDigitized`) | the UTC offset, so nothing has to guess |
+| `GPSTimeStamp` / `GPSDateStamp` | UTC, which is what the GPS spec requires |
+| file mtime and MP4 `creation_time` | the absolute instant |
+
+Real zones via `zoneinfo`, so DST is modelled — Dublin is `+01:00` in August and
+`+00:00` in January. Cities keep a fixed fallback offset for images that ship
+without the IANA database. Every item gets a zone even when it gets no GPS,
+because a camera always knows the local time.
+
+The manifest records both `taken_at` (local, with offset) and `taken_at_utc`.
+Verified on an iPhone 17 Pro simulator: all 14 assets landed on the exact
+instant the manifest specified, photos and video alike.
+
 ## Tests
 
 ```bash
 python3 packages/generator/tests/test_loader.py
+python3 packages/generator/tests/test_exif.py
 ```
 
 No third-party runner. The device targets are covered by fake `adb` and `xcrun`
@@ -118,10 +145,20 @@ for older platform-tools all run in CI with no device and no Android SDK. The
 fakes reject any verb the loader does not currently use, so a new call site
 fails the tests rather than passing silently.
 
+`test_exif.py` builds the same job under `Pacific/Kiritimati` (UTC+14) and
+`Pacific/Niue` (UTC-11) and requires identical instants, checksums and mtimes —
+25 hours apart is enough that the old naive-datetime handling could not have
+passed it.
+
 ## Known limits
 
 - **JPEG and MP4/H.264 only.** HEIC and HEVC are Phase 7. Real iPhones shoot
   HEIC, so a pack from this generator does not exercise that path.
+- **Manifest schema v2 is not v1.** In v1 `taken_at` was a naive local time
+  with no offset, so packs built before the timezone fix cannot be compared
+  instant-for-instant against ones built after. Rebuild rather than mix. The
+  same `--job`/`--seed` will not reproduce a pre-v2 pack byte for byte either,
+  since the EXIF now carries offset tags.
 - **Synthetic bootstrap seeds are obviously synthetic.** They are textured
   enough to compress like photographs (a 12 MP still lands at ~3.4 MB at q88,
   which is the point), but they are not photographs. Run `harvest` for real

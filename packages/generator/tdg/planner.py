@@ -3,11 +3,11 @@ import json
 import os
 import random
 from concurrent.futures import ProcessPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from . import amplify, manifest, sizing
 from .exifwrite import set_mtime
-from .personas import CITIES, PERSONAS
+from .personas import CITIES, PERSONAS, city_tz
 
 
 def capture_dates(count, since: datetime, until: datetime, rng):
@@ -84,10 +84,19 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
 
     total_planned = n_videos + n_photos + 4
     dates = capture_dates(total_planned, since, until, rng)
-    gps_pool = [(lat + rng.gauss(0, 0.05), lon + rng.gauss(0, 0.05))
-                for _, lat, lon in CITIES]
+    # A city carries a timezone as well as coordinates, and every item gets one
+    # even when it gets no GPS: a camera always knows what time it is locally,
+    # and an unanchored capture time lands at a different instant on every
+    # machine that imports it.
+    city_pool = [(name, lat + rng.gauss(0, 0.05), lon + rng.gauss(0, 0.05),
+                  city_tz(tz, fallback))
+                 for name, lat, lon, tz, fallback in CITIES]
 
     items, total, idx = [], 0, 0
+
+    def localise(when, city):
+        """Anchor a naive capture time to the city it was 'taken' in."""
+        return when.replace(tzinfo=city[3])
 
     def record(name, kind, size, when, gps):
         nonlocal total
@@ -98,6 +107,7 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
             "bytes": size,
             "sha256": manifest.sha256_file(path),
             "taken_at": when.isoformat(timespec="seconds"),
+            "taken_at_utc": when.astimezone(timezone.utc).isoformat(timespec="seconds"),
             "gps": {"lat": round(gps[0], 6), "lon": round(gps[1], 6)} if gps else None,
         })
         total += size
@@ -108,7 +118,10 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
     remaining_video = video_budget
     i = 0
     while remaining_video >= bytes_per_sec * 3 and i < n_videos + 4:
-        when = dates[min(idx, len(dates) - 1)]
+        # A clip carries no GPS, but it still needs a zone: MP4 stores an
+        # absolute instant, so an unanchored time would put video hours away
+        # from the stills shot beside it.
+        when = localise(dates[min(idx, len(dates) - 1)], rng.choice(city_pool))
         dur = max(3.0, min(rng.uniform(*clip_seconds), remaining_video / bytes_per_sec))
         if dur < 3.0:
             break
@@ -141,8 +154,11 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
 
     def next_task():
         nonlocal idx
-        when = dates[min(idx, len(dates) - 1)]
-        gps = rng.choice(gps_pool) if rng.random() < 0.75 else None
+        city = rng.choice(city_pool)
+        when = localise(dates[min(idx, len(dates) - 1)], city)
+        # No GPS on a quarter of them — location services off, indoors, or the
+        # photo predates the permission. The zone still comes from the city.
+        gps = (city[1], city[2]) if rng.random() < 0.75 else None
         name = f"TDG_{job_id}_{idx:05d}.jpg"
         task = (os.path.join(seed_dir, rng.choice(stills)["file"]),
                 os.path.join(out_dir, name), persona, when, idx, job_id, gps)
@@ -188,7 +204,7 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
     min_clip_bytes = bytes_per_sec * 8
     while deficit >= min_clip_bytes:
         dur = min(deficit / (bytes_per_sec * 1.02), 120)
-        when = dates[min(idx, len(dates) - 1)]
+        when = localise(dates[min(idx, len(dates) - 1)], rng.choice(city_pool))
         name = f"TDG_{job_id}_{idx:05d}.mp4"
         size = amplify.render_video(
             os.path.join(out_dir, name), persona, when, idx, job_id,
@@ -206,10 +222,11 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
     PAD_CHUNK = 8 * 1024 * 1024
     while deficit > 0:
         chunk = min(deficit, PAD_CHUNK)
-        when = dates[min(idx, len(dates) - 1)]
+        city = rng.choice(city_pool)
+        when = localise(dates[min(idx, len(dates) - 1)], city)
         name = f"TDG_{job_id}_{idx:05d}.jpg"
         path = os.path.join(out_dir, name)
-        gps = rng.choice(gps_pool)
+        gps = (city[1], city[2])
         size = None
         for q, scale in ((70, 0.5), (55, 0.35), (40, 0.22), (30, 0.12), (25, 0.06)):
             w = max(320, int(persona.still_sizes[0][0] * scale))

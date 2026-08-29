@@ -10,7 +10,10 @@ import json
 import os
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 1
+# v2: taken_at carries a UTC offset and is accompanied by taken_at_utc. In v1
+# it was a naive local time, which left the absolute capture instant up to
+# whatever machine imported the pack.
+SCHEMA_VERSION = 2
 
 
 def sha256_file(path, chunk=1 << 20):

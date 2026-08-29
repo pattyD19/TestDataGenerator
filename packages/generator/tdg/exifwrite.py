@@ -83,11 +83,29 @@ class _IFD:
         return out, overflow
 
 
+def offset_string(when: datetime) -> str:
+    """'+09:00' for EXIF OffsetTime tags. Empty for a naive datetime."""
+    off = when.utcoffset()
+    if off is None:
+        return ""
+    total = int(off.total_seconds())
+    sign = "+" if total >= 0 else "-"
+    total = abs(total)
+    return f"{sign}{total // 3600:02d}:{(total % 3600) // 60:02d}"
+
+
 def build_exif(persona, when: datetime, width: int, height: int,
                gps=None, iso=200, exposure=1 / 120):
-    """Return APP1 EXIF bytes suitable for Pillow's exif= argument."""
+    """Return APP1 EXIF bytes suitable for Pillow's exif= argument.
+
+    ``when`` should be timezone-aware. DateTimeOriginal is wall-clock with no
+    zone of its own, so without the accompanying OffsetTimeOriginal tag an
+    importer falls back to its own timezone and the asset lands at a different
+    absolute instant on every machine that imports it.
+    """
     ts = when.strftime("%Y:%m:%d %H:%M:%S")
     subsec = f"{when.microsecond // 1000:03d}"
+    offset = offset_string(when)
 
     ifd0 = _IFD()
     ifd0.add(0x010F, TIFF_ASCII, persona.make)
@@ -107,6 +125,11 @@ def build_exif(persona, when: datetime, width: int, height: int,
     exif.add(0x9003, TIFF_ASCII, ts)                                # DateTimeOriginal
     exif.add(0x9004, TIFF_ASCII, ts)                                # DateTimeDigitized
     exif.add(0x9291, TIFF_ASCII, subsec)                            # SubSecTimeOriginal
+    if offset:
+        # EXIF 2.31 added these. Without them DateTimeOriginal is ambiguous.
+        exif.add(0x9010, TIFF_ASCII, offset)                        # OffsetTime
+        exif.add(0x9011, TIFF_ASCII, offset)                        # OffsetTimeOriginal
+        exif.add(0x9012, TIFF_ASCII, offset)                        # OffsetTimeDigitized
     exif.add(0x920A, TIFF_RATIONAL, _rational(persona.focal_length, 100))
     exif.add(0xA002, TIFF_LONG, width)
     exif.add(0xA003, TIFF_LONG, height)
@@ -122,9 +145,13 @@ def build_exif(persona, when: datetime, width: int, height: int,
         gpsifd.add(0x0002, TIFF_RATIONAL, _dms(lat))
         gpsifd.add(0x0003, TIFF_ASCII, "E" if lon >= 0 else "W")
         gpsifd.add(0x0004, TIFF_RATIONAL, _dms(lon))
+        # GPSTimeStamp and GPSDateStamp are defined as UTC, not local time.
+        # Writing wall-clock here contradicts DateTimeOriginal + OffsetTime and
+        # is exactly the kind of inconsistency a metadata-reading app trips on.
+        utc = when.astimezone(timezone.utc) if when.utcoffset() is not None else when
         gpsifd.add(0x0007, TIFF_RATIONAL,
-                   [(when.hour, 1), (when.minute, 1), (when.second, 1)])
-        gpsifd.add(0x001D, TIFF_ASCII, when.strftime("%Y:%m:%d"))
+                   [(utc.hour, 1), (utc.minute, 1), (utc.second, 1)])
+        gpsifd.add(0x001D, TIFF_ASCII, utc.strftime("%Y:%m:%d"))
 
     # Layout: header(8) | IFD0 | IFD0 overflow | EXIF IFD | overflow | GPS IFD | overflow
     header = b"MM\x00\x2a" + struct.pack(">I", 8)
@@ -157,12 +184,24 @@ def build_exif(persona, when: datetime, width: int, height: int,
 
 
 def set_mtime(path, when: datetime):
+    """Set mtime to the capture instant.
+
+    An aware datetime gives the same absolute instant on every machine. A naive
+    one would be read as the build host's local time, which is how a pack ends
+    up with mtimes that disagree with its own EXIF.
+    """
     ts = when.timestamp()
     os.utime(path, (ts, ts))
 
 
 def ffmpeg_time(when: datetime) -> str:
-    """ffmpeg creation_time wants ISO-8601 UTC."""
+    """ffmpeg creation_time wants ISO-8601 UTC.
+
+    MP4 has no local-time-plus-offset form the way EXIF does: the container
+    stores an absolute instant. So this is where a naive datetime does real
+    damage — it would be labelled UTC while the JPEGs beside it are labelled
+    local, putting photos and videos in the same pack hours apart.
+    """
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
     return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
