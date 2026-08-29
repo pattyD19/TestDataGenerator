@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The control plane's accent, so the app and the web UI read as one product. -->
+    <color name="ic_launcher_background">#2F5D50</color>
+</resources>

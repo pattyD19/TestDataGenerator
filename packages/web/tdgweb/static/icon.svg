@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="TDG">
+  <title>TDG</title>
+  <rect width="100" height="100" rx="22.50" fill="#2f5d50"/>
+  <rect x="25.00" y="15.00" width="41.00" height="55.00" rx="4.50" fill="#aacabd"/>
+  <rect x="34.00" y="30.00" width="41.00" height="55.00" rx="4.50" fill="#ffffff"/>
+  <circle cx="46.38" cy="45.16" r="3.52" fill="#2f5d50"/>
+  <polygon points="52.34,75.65 60.99,61.13 68.03,75.65" fill="#2f5d50"/>
+  <polygon points="40.97,75.65 51.79,54.60 57.75,75.65" fill="#2f5d50"/>
+</svg>

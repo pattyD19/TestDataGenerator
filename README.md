@@ -42,6 +42,23 @@ python3 -m tdg.cli wipe --job <id>
 | 6 | Conformance harness | not started |
 | 7 | HEIC/HEVC and realism | not started |
 
+## The mark
+
+Two sheets of media, stacked, with a photo glyph on the front — the product
+makes files, and specifically photos and video.
+
+There is no SVG rasteriser on the build machines, so the geometry lives once in
+[`assets/make_logo.py`](assets/make_logo.py) and is emitted twice: drawn with
+Pillow for the PNGs the app stores need, written out as SVG for the web. The
+favicon and the app icons therefore cannot drift apart.
+
+```bash
+python3 assets/make_logo.py     # regenerates every size, all committed
+```
+
+Its output lands in the iOS asset catalog, the Android mipmaps (adaptive icon
+included) and the web's static directory. Nobody needs to run it to build.
+
 ## Tests
 
 No third-party runner; each suite is a plain script.
