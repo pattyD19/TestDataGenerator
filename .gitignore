@@ -15,3 +15,8 @@ clients/android/.gradle/
 clients/android/build/
 clients/android/app/build/
 *.apk
+
+# iOS
+clients/ios/build/
+clients/ios/DerivedData/
+*.xcuserdatad
