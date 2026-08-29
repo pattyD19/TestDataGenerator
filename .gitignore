@@ -1,0 +1,4 @@
+seed-pool/
+out/
+node_modules/
+*.pack/
