@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The control plane is plain HTTP on a lab LAN, and cleartext has been off by
+  default since Android 9. This permits it rather than forcing TLS onto a
+  generator that lives on someone's desk. Internal test tool only — do not
+  point this app at anything on the public internet.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

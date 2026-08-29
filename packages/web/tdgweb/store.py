@@ -84,6 +84,16 @@ class Store:
             cur = self._db.execute("SELECT * FROM jobs WHERE id = ?", (jid,))
             return self._row(cur.fetchone())
 
+    def by_token(self, token):
+        """Find a job by its pairing code — how a phone turns six typed digits
+        into a pack. Only completed jobs pair: there is nothing to hand a
+        device until the manifest exists."""
+        with self._lock:
+            cur = self._db.execute(
+                "SELECT * FROM jobs WHERE token = ? AND status = 'done' "
+                "ORDER BY created_at DESC LIMIT 1", (token,))
+            return self._row(cur.fetchone())
+
     def list(self, limit=100):
         with self._lock:
             cur = self._db.execute(

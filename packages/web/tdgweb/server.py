@@ -105,6 +105,8 @@ class Handler(BaseHTTPRequestHandler):
                 })
             if path == "/api/jobs":
                 return self._json([self._public(j) for j in self.server.store.list()])
+            if parts[:2] == ["api", "pair"] and len(parts) == 3:
+                return self._pair(parts[2])
             if parts[:2] == ["api", "jobs"] and len(parts) == 3:
                 return self._one(parts[2])
             if parts[:2] == ["api", "jobs"] and len(parts) == 4:
@@ -167,6 +169,29 @@ class Handler(BaseHTTPRequestHandler):
         if job is None:
             return self._fail(404, "no such job")
         return self._json(self._public(job))
+
+    def _pair(self, code):
+        """Turn a six-digit code into everything a loader needs.
+
+        A phone has a keypad and no way to know a twelve-hex-digit job id, so
+        the code has to be sufficient on its own. It resolves to the manifest
+        URL and the totals a device checks against its own free space before
+        accepting the job.
+        """
+        job = self.server.store.by_token(code)
+        if job is None:
+            return self._fail(404, "no finished pack has that code")
+        pub = self._public(job)
+        return self._json({
+            "id": job["id"],
+            "job_id": job["job_id"],
+            "label": job["params"].get("label") or "",
+            "profile": job["params"].get("profile"),
+            "file_count": job["file_count"],
+            "total_bytes": job["done_bytes"],
+            "manifest_url": pub["manifest_url"],
+            "token": job["token"],
+        })
 
     def _create(self):
         body = self._body()

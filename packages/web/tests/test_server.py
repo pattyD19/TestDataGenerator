@@ -161,6 +161,20 @@ def main():
     code, _, _ = req("/api/nope")
     check(code == 404, "an unknown route is 404")
 
+    print("pairing, which is all a phone has to go on")
+    code, paired, _ = req(f"/api/pair/{token}")
+    check(code == 200 and paired["job_id"] == done["job_id"],
+          "a six-digit code alone resolves to the pack")
+    check(paired["manifest_url"] == done["manifest_url"],
+          "and hands back the manifest URL, so the phone needs no job id")
+    check(paired["total_bytes"] == done["done_bytes"] and
+          paired["file_count"] == done["file_count"],
+          "with the totals a device checks against its own free space")
+    code, _, _ = req("/api/pair/000000")
+    check(code == 404, "an unknown code is refused")
+    code, _, _ = req("/api/pair/nonsense")
+    check(code == 404, "a non-numeric code is refused rather than matched loosely")
+
     print("cancel and resume")
     code, big, _ = req("/api/jobs", "POST", {
         "size": "160MB", "profile": "pixel-8", "photo_fraction": 1.0,

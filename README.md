@@ -25,7 +25,7 @@ python3 -m tdg.cli wipe --job <id>
 - `packages/generator` — seed harvester, amplifier, size planner, manifest builder,
   and the `tdg` CLI (`build` / `load` / `wipe` / `devices` / `receipts`)
 - `packages/web` — browser control plane: presets, live progress, LAN pack serving
-- `clients/android` — Kotlin loader (MediaStore) — *not built yet, Phase 4*
+- `clients/android` — Kotlin loader (MediaStore), builds with Gradle
 - `clients/ios` — SwiftUI loader (PHAssetCreationRequest) — *not built yet, Phase 5*
 - `seed-pool` — cached CC0/CC-BY source media + LICENSES.csv (gitignored, rebuilt by harvester)
 - `docs` — manifest schema, device personas, licensing notes
@@ -37,7 +37,7 @@ python3 -m tdg.cli wipe --job <id>
 | 1 | Exact-size generator | done |
 | 2 | Desktop & CI loaders | done — verified on a real iOS simulator and Android emulator |
 | 3 | Web control plane | done |
-| 4 | Android loader app | not started |
+| 4 | Android loader app | done — verified on an Android 17 emulator, not yet a physical handset |
 | 5 | iOS loader app | not started |
 | 6 | Conformance harness | not started |
 | 7 | HEIC/HEVC and realism | not started |

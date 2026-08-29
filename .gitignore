@@ -1,8 +1,17 @@
 seed-pool/
 out/
 pack/
+packs/
 node_modules/
 *.pack/
+packs/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Android
+clients/android/local.properties
+clients/android/.gradle/
+clients/android/build/
+clients/android/app/build/
+*.apk
