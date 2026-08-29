@@ -83,7 +83,16 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
         until = datetime.fromisoformat(head["until"])
     else:
         until = until or datetime.now()
-    with open(os.path.join(seed_dir, "seeds.json")) as fh:
+    seeds_json = os.path.join(seed_dir, "seeds.json")
+    if not os.path.exists(seeds_json):
+        # The likeliest misconfiguration on a fresh machine, and a traceback
+        # about a missing file does not tell anyone what to do about it.
+        raise SystemExit(
+            f"no seed pool at {seed_dir}\n"
+            "  Build one first:\n"
+            "    python3 -m tdg.cli bootstrap-seeds        # synthetic, no network\n"
+            "    python3 -m tdg.cli harvest --images 200   # real open-license media")
+    with open(seeds_json) as fh:
         seed_doc = json.load(fh)
     stills = [s for s in seed_doc["seeds"] if s["kind"] == "image"]
     clips = [s for s in seed_doc["seeds"] if s["kind"] == "video"]

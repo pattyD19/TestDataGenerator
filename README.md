@@ -5,12 +5,50 @@ camera roll, with realistic EXIF — for testing gallery-scanning apps.
 
 See [PLAN.md](./PLAN.md) for the full build plan.
 
+## Quick start
+
+```bash
+# a seed pool (synthetic, no network needed)
+python3 -m tdg.cli bootstrap-seeds            # from packages/generator
+
+# either drive it from the browser...
+python3 packages/web/serve.py                 # then open http://localhost:8722
+
+# ...or from the command line
+python3 -m tdg.cli build --size 25GB --out ./pack
+python3 -m tdg.cli load --pack ./pack --target simulator
+python3 -m tdg.cli wipe --job <id>
+```
+
 ## Layout
 
-- `packages/generator` — seed harvester, amplifier, size planner, manifest builder
-- `packages/web` — browser control plane (Next.js)
-- `packages/cli` — `tdg build` / `tdg load` / `tdg wipe`
-- `clients/android` — Kotlin loader (MediaStore)
-- `clients/ios` — SwiftUI loader (PHAssetCreationRequest)
+- `packages/generator` — seed harvester, amplifier, size planner, manifest builder,
+  and the `tdg` CLI (`build` / `load` / `wipe` / `devices` / `receipts`)
+- `packages/web` — browser control plane: presets, live progress, LAN pack serving
+- `clients/android` — Kotlin loader (MediaStore) — *not built yet, Phase 4*
+- `clients/ios` — SwiftUI loader (PHAssetCreationRequest) — *not built yet, Phase 5*
 - `seed-pool` — cached CC0/CC-BY source media + LICENSES.csv (gitignored, rebuilt by harvester)
 - `docs` — manifest schema, device personas, licensing notes
+
+## Status
+
+| Phase | | |
+|---|---|---|
+| 1 | Exact-size generator | done |
+| 2 | Desktop & CI loaders | done — verified on a real iOS simulator and Android emulator |
+| 3 | Web control plane | done |
+| 4 | Android loader app | not started |
+| 5 | iOS loader app | not started |
+| 6 | Conformance harness | not started |
+| 7 | HEIC/HEVC and realism | not started |
+
+## Tests
+
+No third-party runner; each suite is a plain script.
+
+```bash
+python3 packages/generator/tests/test_exif.py      # capture times and EXIF
+python3 packages/generator/tests/test_loader.py    # device loaders, via fakes
+python3 packages/generator/tests/test_resume.py    # interrupted builds
+python3 packages/web/tests/test_server.py          # the control plane
+```

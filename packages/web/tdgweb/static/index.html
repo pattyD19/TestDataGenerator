@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tdg — test data control plane</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>tdg <span class="dim">control plane</span></h1>
+  <p class="sub">Fill a device with photos and video of an exact size.</p>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>New pack</h2>
+
+    <div class="presets" id="presets"></div>
+
+    <form id="form" autocomplete="off">
+      <div class="grid">
+        <label>Size
+          <input name="size" id="size" value="500MB" required>
+          <small>25GB, 512MB, or raw bytes. The pack lands on this exactly.</small>
+        </label>
+
+        <label>Device profile
+          <select name="profile" id="profile"></select>
+          <small>Sets camera make and model, resolutions and video mode.</small>
+        </label>
+
+        <label>Photo share of bytes
+          <input type="range" name="photo_fraction" id="photo_fraction"
+                 min="0" max="1" step="0.05" value="0.7">
+          <small><span id="fraction_label">70%</span> stills. File count follows
+            from this &mdash; 26,000 small files stress a client very differently
+            from 200 large ones.</small>
+        </label>
+
+        <label>Label <span class="opt">optional</span>
+          <input name="label" id="label" placeholder="e.g. Pixel regression, ticket 4412">
+          <small>Only to help you find it later.</small>
+        </label>
+
+        <label>Earliest capture <span class="opt">optional</span>
+          <input name="since" id="since" placeholder="2022-01-01">
+        </label>
+
+        <label>Latest capture <span class="opt">optional</span>
+          <input name="until" id="until" placeholder="2024-09-01">
+        </label>
+      </div>
+
+      <div class="actions">
+        <button type="submit" id="build">Build pack</button>
+        <span class="err" id="formError" role="alert"></span>
+      </div>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Jobs</h2>
+    <p class="lan" id="lan"></p>
+    <div id="jobs" class="jobs"><p class="dim">No jobs yet.</p></div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
