@@ -15,7 +15,7 @@ It exits non-zero when a check fails, so a conformance run can gate CI.
 
 ## The matrix
 
-The plan calls for six devices. Two are covered, both emulated:
+The plan calls for six devices. Three are covered — two emulated, and one **physical iPhone**:
 
 | Device | Role | Status |
 |---|---|---|
@@ -23,11 +23,12 @@ The plan calls for six devices. Two are covered, both emulated:
 | [iPhone 17 Pro simulator, iOS 26.5](iphone-17-pro-simulator-ios-26.5.md) | iOS reference | **passed** |
 | [Pixel 9, edge-case pack](pixel-9-emulator-edge-cases.md) | duplicates, zero-byte, truncated, non-ASCII names, a screenshot | **passed** |
 | [iPhone 17 Pro, HEIC + HEVC pack](iphone-17-pro-simulator-heic-hevc.md) | the formats a real iPhone actually produces | **passed** |
+| [**iPhone 15 Pro (physical), iOS 26.6.1**](iphone-15-pro-physical-ios-26.6.1.md) | **real hardware** — 71/72 accepted, one correct refusal | **passed** |
 | Current Pixel (physical) | AOSP reference on real hardware | not run — no device |
 | Current Galaxy S | One UI, its own Gallery app | not run — no device |
 | Galaxy A-series | budget tier: slow storage, tight battery management | not run — no device |
 | Pixel or Galaxy on Android 11 | the OS floor | not run — no device |
-| Current iPhone (physical) | Photos, HEIC-native | not run — no device |
+| ~~Current iPhone (physical)~~ | Photos, HEIC-native | **done** — see above |
 | iPhone on iOS 17 | the iOS floor | not run — no device |
 
 **An emulator pass is necessary, not sufficient.** It does not exercise the
@@ -72,10 +73,12 @@ The edge-case pack turned up real behaviour worth knowing:
 
 ## Known gaps in the harness itself
 
-- **A physical iPhone cannot be verified this way.** The Photos database is not
-  reachable from outside the app, so `--target simulator` reads a file that only
-  exists on a simulator. Verifying a real iPhone needs the loader app to report
-  back, which is not built.
+- **A physical iPhone cannot be verified by `tdg verify`.** The Photos database
+  is not reachable from outside the app. The workaround used for the real-device
+  run is to pull the loader's own receipt off the phone with
+  `devicectl device copy from` — the app's account of every localIdentifier it
+  created. Real measurement, but the loader's word rather than Photos'. Folding
+  that into `tdg verify` as a `device-ios` target is the obvious next step.
 - **`--target emulator` works on a physical Android handset** over USB
   debugging — the same MediaStore query. That path is untested only because
   there is no handset here.

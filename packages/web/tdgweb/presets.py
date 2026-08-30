@@ -113,9 +113,19 @@ def normalise(body):
     if since and until and datetime.fromisoformat(since) >= datetime.fromisoformat(until):
         raise ValueError("since must be earlier than until")
 
+    photo_format = body.get("photo_format", "jpeg")
+    if photo_format not in ("jpeg", "heic", "mixed"):
+        raise ValueError("photo_format must be jpeg, heic or mixed")
+    video_codec = body.get("video_codec", "h264")
+    if video_codec not in ("h264", "hevc"):
+        raise ValueError("video_codec must be h264 or hevc")
+
     params = {
         "size": size,
         "profile": profile,
+        "photo_format": photo_format,
+        "video_codec": video_codec,
+        "edge_cases": bool(body.get("edge_cases")),
         "photo_fraction": fraction,
         "since": since,
         "until": until,

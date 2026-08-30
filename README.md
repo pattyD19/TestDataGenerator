@@ -38,8 +38,8 @@ python3 -m tdg.cli wipe --job <id>
 | 2 | Desktop & CI loaders | done — verified on a real iOS simulator and Android emulator |
 | 3 | Web control plane | done |
 | 4 | Android loader app | done — verified on an Android 17 emulator, not yet a physical handset |
-| 5 | iOS loader app | done — verified on an iOS 26.5 simulator; no signing identity here, so untested on a physical iPhone |
-| 6 | Conformance harness | harness done; 2 of 6 devices verified, both emulated |
+| 5 | iOS loader app | done — verified on a **physical iPhone 15 Pro** (iOS 26.6.1) and the simulator |
+| 6 | Conformance harness | harness done; 3 of 6 devices verified, including one physical iPhone |
 | 7 | HEIC/HEVC and realism | formats done and verified; Live Photos and the 4 GB file outstanding |
 
 ## The mark

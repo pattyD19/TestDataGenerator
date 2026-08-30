@@ -134,6 +134,7 @@ final class LoaderModel: ObservableObject {
         defer { try? FileManager.default.removeItem(at: staging) }
 
         var done: Int64 = 0
+        var rejected: [(String, String)] = []
         let already = receipt.count
         for chunk in pending.chunked(into: PhotoWriter.batchSize) {
             try Task.checkCancellation()
@@ -149,13 +150,24 @@ final class LoaderModel: ObservableObject {
                 status = "Downloading \(already + staged.count) of \(pack.fileCount)"
             }
             status = "Importing \(staged.count) into Photos"
-            let created = try await writer.add(batch: staged, to: album)
-            receipt.add(created)
+            let outcome = await writer.add(batch: staged, to: album)
+            receipt.add(outcome.created)
+            rejected += outcome.rejected
             detail = "\(receipt.count) of \(pack.fileCount) in the library"
+                   + (rejected.isEmpty ? "" : "  ·  \(rejected.count) refused")
         }
         progress = 1
-        status = "Done"
+        status = rejected.isEmpty ? "Done" : "Done, with refusals"
         detail = "\(receipt.count) assets in “\(pack.album)”"
+        if !rejected.isEmpty {
+            // Named, not just counted: which asset Photos refused is the
+            // interesting part, and a zero-byte file being refused is the
+            // correct outcome rather than a defect.
+            let lines = rejected.prefix(4)
+                .map { "\($0.0): \($0.1)" }.joined(separator: "\n")
+            detail += "\n\nPhotos refused \(rejected.count):\n" + lines
+                    + (rejected.count > 4 ? "\n…" : "")
+        }
     }
 
     // MARK: wipe

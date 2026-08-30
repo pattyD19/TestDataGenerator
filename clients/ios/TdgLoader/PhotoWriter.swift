@@ -66,12 +66,58 @@ final class PhotoWriter {
             withLocalIdentifiers: [id], options: nil).firstObject
     }
 
-    /// Import one batch of already-downloaded files in a single transaction.
+    /// Import a batch, isolating any asset Photos refuses.
     ///
-    /// Returns (fileName, localIdentifier) for each asset created, which is
-    /// what the receipt records and what wipe later deletes.
+    /// A `performChanges` transaction is all-or-nothing: one invalid resource
+    /// fails every asset in it. Found on real hardware — a 72-asset pack
+    /// containing a zero-byte file failed entirely with
+    /// PHPhotosErrorInvalidResource (3302), losing 300 MB of completed
+    /// transfer along with it.
+    ///
+    /// So the fast path is one transaction for the whole batch, and on failure
+    /// it retries one asset at a time to find out which ones are actually bad.
+    /// Assets Photos legitimately cannot accept — an empty file has no
+    /// resource to validate — are reported, not fatal: the point of the pack is
+    /// that the *app under test* meets them, so the loader has to get the rest
+    /// of the library in place.
     func add(batch: [(item: PackItem, file: URL)],
-             to collection: PHAssetCollection?) async throws -> [(String, String)] {
+             to collection: PHAssetCollection?)
+             async -> (created: [(String, String)], rejected: [(String, String)]) {
+        do {
+            return (try await addAll(batch, to: collection), [])
+        } catch {
+            var created: [(String, String)] = []
+            var rejected: [(String, String)] = []
+            for entry in batch {
+                do {
+                    created += try await addAll([entry], to: collection)
+                } catch {
+                    rejected.append((entry.item.name, Self.describe(error)))
+                }
+            }
+            return (created, rejected)
+        }
+    }
+
+    /// Photos error codes are opaque integers in a crash log; this turns the
+    /// ones a loader actually meets into something readable.
+    static func describe(_ error: Error) -> String {
+        let ns = error as NSError
+        guard ns.domain == PHPhotosErrorDomain else { return ns.localizedDescription }
+        switch ns.code {
+        case 3302: return "resource validation failed (an empty or truncated file "
+                        + "cannot become a PHAsset)"
+        case 3303: return "resource missing"
+        case 3305: return "not enough space"
+        case 3300: return "change request not supported as configured"
+        case 3301: return "operation interrupted — transient, worth retrying"
+        case 3311: return "the user denied photo access"
+        default:   return "PHPhotosError \(ns.code)"
+        }
+    }
+
+    private func addAll(_ batch: [(item: PackItem, file: URL)],
+                        to collection: PHAssetCollection?) async throws -> [(String, String)] {
         var placeholders: [(String, PHObjectPlaceholder)] = []
 
         try await PHPhotoLibrary.shared().performChanges {
@@ -81,9 +127,16 @@ final class PhotoWriter {
                     : PHAssetCreationRequest.forAsset()
                 let options = PHAssetResourceCreationOptions()
                 options.originalFilename = entry.item.name
-                // The bytes are already on disk in a temp file this app owns,
-                // so hand them over rather than copying them again.
-                options.shouldMoveFile = true
+                // NOT shouldMoveFile. Moving is cheaper, but a failed
+                // transaction has already consumed the files it processed
+                // before the failure, so the retry below finds nothing to read
+                // and reports perfectly good assets as invalid.
+                //
+                // Seen on real hardware: a 72-asset batch aborted on a
+                // zero-byte file at index 13, and the retry then "refused"
+                // assets 0-12 — a contiguous run, which is the tell. Copying
+                // costs one pass over the bytes and makes the retry honest.
+                options.shouldMoveFile = false
                 req.addResource(with: entry.item.isVideo ? .video : .photo,
                                 fileURL: entry.file, options: options)
 

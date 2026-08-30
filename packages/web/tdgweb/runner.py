@@ -108,7 +108,11 @@ class Runner:
                "--photo-fraction", str(p.get("photo_fraction", 0.70)),
                "--seed", str(p.get("seed", 1)),
                "--preset", p.get("preset", "ultrafast"),
+               "--photo-format", p.get("photo_format", "jpeg"),
+               "--video-codec", p.get("video_codec", "h264"),
                "--seeds", self.seeds_dir]
+        if p.get("edge_cases"):
+            cmd.append("--edge-cases")
         if p.get("since"):
             cmd += ["--since", p["since"]]
         if p.get("until"):

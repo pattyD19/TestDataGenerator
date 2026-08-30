@@ -16,6 +16,7 @@ import os
 import posixpath
 import re
 import socket
+import sys
 import threading
 import urllib.parse
 from http import HTTPStatus
@@ -364,6 +365,19 @@ class Handler(BaseHTTPRequestHandler):
 class ControlPlane(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+
+    def handle_error(self, request, client_address):
+        """A client hanging up mid-connection is not an error.
+
+        A phone closing a keep-alive socket produced a 25-line traceback in the
+        log during the first real-device run. Routine disconnects are dropped so
+        that something genuinely wrong still stands out.
+        """
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError,
+                            ConnectionAbortedError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
 
     def server_bind(self):
         # Accept IPv4 on the same socket. Without clearing V6ONLY a dual-stack
