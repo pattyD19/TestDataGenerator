@@ -79,6 +79,24 @@ It uses whichever encoder is present rather than requiring one:
 So a Linux build box or the Docker image needs `pip install pillow-heif` for
 HEIC. Everything else stays dependency-free.
 
+### What a build actually costs
+
+Measured on an Apple Silicon laptop, and the ratio is what matters:
+
+| phase | rate |
+|---|---|
+| photos (parallel, all cores) | ~33 MB/s |
+| video, 4K H.264 `ultrafast` | ~1.9 MB/s |
+| video, 4K HEVC `ultrafast` | ~1.66 MB/s |
+
+Video is roughly **seventeen times slower per byte than photos**, so build time
+is governed almost entirely by `--photo-fraction`, and hardly at all by
+`--video-codec`. Choosing HEVC costs about 14%; halving the video share nearly
+halves the build.
+
+A 10 GB pack at `--photo-fraction 0.8` took 22 minutes. The same size at 0.6
+would have taken roughly twice that, whichever codec you pick.
+
 ## Edge cases (`--edge-cases`)
 
 The files that break naive gallery code. Ten of them, generated before the bulk

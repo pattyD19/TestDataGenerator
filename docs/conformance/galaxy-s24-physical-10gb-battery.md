@@ -51,3 +51,25 @@ to interfere.
 - **`tdg verify` reports the duration as unknown** because the *app* performed
   the load, so there is no CLI receipt. The 14.9 minutes came from the control
   plane's request log.
+
+## Correction: what actually made the first build slow
+
+The first attempt at this pack was abandoned part-way and rebuilt, and the
+reason given at the time — "HEVC is punishingly slow" — was **wrong**. Two
+variables changed between the two builds, and the codec got the credit that
+belonged to the other one.
+
+A controlled measurement, identical settings with only the codec varying
+(300 MB, 5 clips of 10 s at 4K):
+
+| codec | video encode rate |
+|---|---|
+| H.264 | 1.90 MB/s |
+| HEVC | 1.66 MB/s |
+
+HEVC is about **14% slower**, not six times. What actually halved the build was
+raising `--photo-fraction` from 0.6 to 0.8, which cut the video budget from 4 GB
+to 2 GB. Video encodes at roughly **1.9 MB/s** and photos at roughly
+**33 MB/s** — a seventeen-fold difference — so build time is dominated almost
+entirely by how many bytes of video a pack contains, and barely at all by which
+codec encodes them.
