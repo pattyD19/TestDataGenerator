@@ -1,0 +1,27 @@
+{
+  "job_id": "209dc1",
+  "target": "emulator",
+  "device": "192.168.86.71:5555",
+  "verified_at": "2026-08-30T19:33:46+00:00",
+  "expected_files": 3466,
+  "expected_bytes": 10737418240,
+  "photo_count": 3445,
+  "video_count": 21,
+  "indexed": 3466,
+  "missing": [],
+  "capture_time_preserved": 3464,
+  "dated_assets": 3464,
+  "undated_assets": [
+    "TDG_209dc1_00027.png",
+    "TDG_209dc1_00030.jpg"
+  ],
+  "worst_delta_seconds": 0.999,
+  "album": "DCIM/TDG 209dc1",
+  "album_supported": true,
+  "album_note": null,
+  "expected_album": "TDG 209dc1",
+  "matched_by": "name",
+  "elapsed_seconds": 0.0,
+  "throughput_bytes_per_second": null,
+  "passed": true
+}
