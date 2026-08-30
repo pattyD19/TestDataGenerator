@@ -1,0 +1,27 @@
+{
+  "job_id": "053a7b",
+  "target": "emulator",
+  "device": "R3CWC0AQN0B",
+  "verified_at": "2026-08-30T18:14:43+00:00",
+  "expected_files": 144,
+  "expected_bytes": 524288000,
+  "photo_count": 139,
+  "video_count": 5,
+  "indexed": 144,
+  "missing": [],
+  "capture_time_preserved": 142,
+  "dated_assets": 142,
+  "undated_assets": [
+    "TDG_053a7b_00011.png",
+    "TDG_053a7b_00014.jpg"
+  ],
+  "worst_delta_seconds": 0.997,
+  "album": "DCIM/TDG 053a7b",
+  "album_supported": true,
+  "album_note": null,
+  "expected_album": "TDG 053a7b",
+  "matched_by": "name",
+  "elapsed_seconds": 0.0,
+  "throughput_bytes_per_second": null,
+  "passed": true
+}

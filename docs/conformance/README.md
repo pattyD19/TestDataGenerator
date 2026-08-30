@@ -15,7 +15,7 @@ It exits non-zero when a check fails, so a conformance run can gate CI.
 
 ## The matrix
 
-The plan calls for six devices. Three are covered — two emulated, and one **physical iPhone**:
+The plan calls for six devices. Four are covered — two emulated, plus a **physical iPhone and a physical Galaxy S24**:
 
 | Device | Role | Status |
 |---|---|---|
@@ -24,18 +24,21 @@ The plan calls for six devices. Three are covered — two emulated, and one **ph
 | [Pixel 9, edge-case pack](pixel-9-emulator-edge-cases.md) | duplicates, zero-byte, truncated, non-ASCII names, a screenshot | **passed** |
 | [iPhone 17 Pro, HEIC + HEVC pack](iphone-17-pro-simulator-heic-hevc.md) | the formats a real iPhone actually produces | **passed** |
 | [**iPhone 15 Pro (physical), iOS 26.6.1**](iphone-15-pro-physical-ios-26.6.1.md) | **real hardware** — 71/72 accepted, one correct refusal | **passed** |
+| [**Galaxy S24 (physical), Android 16**](galaxy-s24-physical-android-16.md) | **real hardware** — One UI, Samsung Gallery, 144/144 indexed | **passed** |
 | Current Pixel (physical) | AOSP reference on real hardware | not run — no device |
-| Current Galaxy S | One UI, its own Gallery app | not run — no device |
+| ~~Current Galaxy S~~ | One UI, its own Gallery app | **done** — see above |
 | Galaxy A-series | budget tier: slow storage, tight battery management | not run — no device |
 | Pixel or Galaxy on Android 11 | the OS floor | not run — no device |
 | ~~Current iPhone (physical)~~ | Photos, HEIC-native | **done** — see above |
 | iPhone on iOS 17 | the iOS floor | not run — no device |
 
-**An emulator pass is necessary, not sufficient.** It does not exercise the
-three things §4 actually warns about: Samsung's battery manager suspending a
-long fill, One UI's Gallery doing its own album grouping, or slow eMMC storage
-on a budget handset. Nor does it touch the OS floors — `minSdk 30` and
-`IPHONEOS_DEPLOYMENT_TARGET 17.0` are both declared rather than tested.
+**An emulator pass is necessary, not sufficient**, and the two physical runs
+proved it: the iPhone found two loader bugs no simulator could, and the S24
+showed that One UI files undated assets under "Today" and hides the album behind
+"View all". What is still untested is **Samsung's battery manager suspending a
+long fill** — both physical runs were under a minute — and the OS floors, since
+`minSdk 30` and `IPHONEOS_DEPLOYMENT_TARGET 17.0` are declared rather than
+exercised.
 
 ## What the two passes tell us
 
@@ -46,10 +49,19 @@ the import to within a second of the manifest — on Android through
 at the same instant. That is the payoff from anchoring capture times to a
 timezone in the generator.
 
-The interesting difference is throughput: **4.5 MB/s over adb against
-63.8 MB/s into the simulator**. The simulator writes to the host's own disk;
-adb is a real transfer. On a physical device the transfer, not the encode, is
-the bound — which is the argument for running the generator on the LAN.
+The interesting difference is throughput, and the physical devices settle it:
+
+| path | rate | 64 GB would take |
+|---|---|---|
+| simulator (`addmedia`, host disk) | 63.8 MB/s | — |
+| **Galaxy S24 over Wi-Fi** | **11.9 MB/s** | ~1.5 h |
+| Pixel emulator over adb | 4.5 MB/s | ~4 h |
+| **iPhone 15 Pro over Wi-Fi** | **~2.2 MB/s** | ~8 h |
+
+On real hardware the transfer, not the encode, is the bound — which is the
+argument for running the generator on the LAN. The five-fold gap between the two
+handsets on the same network is worth a second look before anyone plans a 64 GB
+iPhone fill.
 
 ## What the format and edge-case runs found
 
