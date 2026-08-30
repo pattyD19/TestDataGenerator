@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      App Transport Security blocks cleartext HTTP by default, and the control
+      plane is plain HTTP on a lab LAN. NSAllowsLocalNetworking permits it for
+      local addresses ONLY — it does not open the app up to cleartext on the
+      public internet the way NSAllowsArbitraryLoads would.
+
+      The simulator never needed this: it reached the control plane on
+      127.0.0.1, which ATS exempts. A phone has to use the Mac's LAN address,
+      which it does not.
+    -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+</dict>
+</plist>

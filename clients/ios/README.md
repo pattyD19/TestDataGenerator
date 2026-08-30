@@ -47,6 +47,26 @@ The team lives in `Signing.xcconfig`, which is **gitignored** — the project is
 not tied to one developer account, and moving it to an org team is editing one
 line rather than the project file. Copy `Signing.xcconfig.example` to start.
 
+### Reaching the control plane from a phone
+
+Two Info.plist keys exist solely for the device case, and neither was needed on
+the simulator — which is exactly why they were missing until a real phone was in
+the picture:
+
+- **`NSAllowsLocalNetworking`** (in `TdgLoader-Info.plist`). App Transport
+  Security blocks cleartext HTTP, and the control plane is plain HTTP on a lab
+  LAN. This permits it for *local addresses only*, unlike
+  `NSAllowsArbitraryLoads` which would open the app to cleartext everywhere.
+  The simulator never tripped over this because it used `127.0.0.1`, which ATS
+  exempts; a phone must use the Mac's LAN address, which it does not.
+- **`NSLocalNetworkUsageDescription`**. iOS 14+ asks permission before an app
+  may talk to the local network. Without the string the prompt cannot be shown
+  and the connection simply times out.
+
+Expect **three** permission prompts on a device, in this order: local network,
+photo-library *add* access when the fill starts, and — only if you wipe — full
+photo access plus a system confirmation naming the asset count.
+
 Two things the first device build needs that no configuration can supply:
 
 - **`-allowProvisioningUpdates`**, or Xcode's UI. Without it the build stops at
