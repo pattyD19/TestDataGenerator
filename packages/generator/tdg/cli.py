@@ -43,6 +43,7 @@ def cmd_build(args):
         until=datetime.fromisoformat(args.until) if args.until else None,
         job_id=args.job, seed=args.seed, preset=args.preset, jobs=args.jobs,
         clip_seconds=(args.min_clip, args.max_clip), restart=args.restart,
+        video_jobs=args.video_jobs,
         photo_format=args.photo_format, video_codec=args.video_codec,
         edge_cases=args.edge_cases,
         progress=(lambda m: None) if args.quiet else print)
@@ -191,6 +192,10 @@ def main(argv=None):
     g.add_argument("--edge-cases", action="store_true",
                    help="add the awkward files: duplicates, zero-byte, "
                         "truncated, unicode names, a burst run, a screenshot")
+    g.add_argument("--video-jobs", type=int, default=None,
+                   help="clips to encode at once (default 4). The lavfi source "
+                        "is single-threaded, so this is where video build time "
+                        "comes from; above 4 it got slower, not faster")
     g.add_argument("--restart", action="store_true",
                    help="discard a partial build in --out and start over "
                         "(a matching partial build is otherwise resumed)")

@@ -81,21 +81,40 @@ HEIC. Everything else stays dependency-free.
 
 ### What a build actually costs
 
-Measured on an Apple Silicon laptop, and the ratio is what matters:
+Measured on a 10-core Apple Silicon laptop, and the ratio is what matters:
 
 | phase | rate |
 |---|---|
 | photos (parallel, all cores) | ~33 MB/s |
-| video, 4K H.264 `ultrafast` | ~1.9 MB/s |
-| video, 4K HEVC `ultrafast` | ~1.66 MB/s |
+| video, 4K, serial | ~1.8 MB/s |
+| video, 4K, `--video-jobs 4` (default) | ~4.6 MB/s |
 
-Video is roughly **seventeen times slower per byte than photos**, so build time
-is governed almost entirely by `--photo-fraction`, and hardly at all by
-`--video-codec`. Choosing HEVC costs about 14%; halving the video share nearly
-halves the build.
+Video is the expensive half, so build time is governed by `--photo-fraction`
+far more than by `--video-codec` — HEVC costs about 14% over H.264, while
+halving the video share nearly halves the build.
 
-A 10 GB pack at `--photo-fraction 0.8` took 22 minutes. The same size at 0.6
-would have taken roughly twice that, whichever codec you pick.
+**Video encoding is not encoder-bound.** A 4K clip spends ~29 of its ~30
+seconds inside the single-threaded lavfi source generating frames, and the
+whole job uses about 1.4 of 10 cores. That is why clips are encoded several at
+a time: on a 600 MB video-heavy pack, `--video-jobs 1` took 313 s and the
+default 4 took 124 s, a **2.5x** speedup.
+
+More is not better. Measured throughput for 4K clips:
+
+| concurrent clips | throughput |
+|---|---|
+| 1 | 1.72 MB/s |
+| **4** | **5.21 MB/s** |
+| 8 | 1.44 MB/s — *slower than serial* |
+
+Past the four performance cores the work lands on efficiency cores and 4K
+frame buffers start to hurt, so `--video-jobs` is capped at 4.
+
+Clips are planned as a batch and priced off one rate estimate rather than
+re-learned per clip, so **`--video-jobs` changes which durations get chosen**.
+It is part of the build fingerprint: the same `--job`/`--seed` reproduces a pack
+only at the same `--video-jobs`, and a part-built pack will not resume with a
+different value.
 
 ## Edge cases (`--edge-cases`)
 

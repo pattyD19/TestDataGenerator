@@ -49,6 +49,35 @@ def _photo_task(args):
     return out_path, size
 
 
+def _video_task(args):
+    """Top-level so it survives pickling into the worker pool."""
+    (out_path, persona, when, index, job_id, vw, vh, vbitrate, dur,
+     seed_clip, preset, codec) = args
+    size = amplify.render_video(out_path, persona, when, index, job_id,
+                                vw, vh, vbitrate, dur, seed_clip=seed_clip,
+                                preset=preset, codec=codec)
+    return out_path, size
+
+
+# How many clips to encode at once.
+#
+# The bottleneck is not the encoder: a 4K clip spends ~29 of its ~30 seconds in
+# the single-threaded lavfi source generating frames, and the whole job uses
+# about 1.4 of 10 cores. Running several at once fills the machine.
+#
+# Measured on a 10-core Apple Silicon laptop (4 performance + 6 efficiency),
+# 4K clips at 45 Mbps:
+#
+#     1 at a time   1.72 MB/s
+#     4 at a time   5.21 MB/s     <- 3.0x
+#     8 at a time   1.44 MB/s     <- slower than serial
+#
+# Eight regressed hard — past the performance cores the work lands on
+# efficiency cores and the 4K frame buffers start to hurt. So this is
+# deliberately capped low rather than set to the core count.
+VIDEO_JOBS_CAP = 4
+
+
 PHOTO_EXT = {"jpeg": "jpg", "heic": "heic"}
 
 
@@ -91,7 +120,8 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
                photo_fraction=0.70, since=None, until=None, job_id=None,
                seed=1, video_mode=None, clip_seconds=(20, 60), preset="ultrafast",
                jobs=None, progress=print, restart=False,
-               photo_format="jpeg", video_codec="h264", edge_cases=False):
+               photo_format="jpeg", video_codec="h264", edge_cases=False,
+               video_jobs=None):
     persona = PERSONAS[persona_key]
     rng = random.Random(seed)
     job_id = job_id or f"{rng.randrange(16**6):06x}"
@@ -113,7 +143,7 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
         job=job_id, seed=seed, video_mode=video_mode,
         clips=list(clip_seconds), preset=preset,
         photo_format=photo_format, video_codec=video_codec,
-        edge_cases=edge_cases,
+        edge_cases=edge_cases, video_jobs=video_jobs,
         seeds=os.path.abspath(seed_dir))
 
     resuming = head is not None
@@ -232,31 +262,55 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
     # ---- videos -----------------------------------------------------------
     # Driven by the remaining video budget rather than a fixed count, so a
     # small pack still gets real clips instead of one oversized trim file.
-    while phase == "video" and remaining_video >= bytes_per_sec * 3 \
-            and video_i < n_videos + 4:
-        # A clip carries no GPS, but it still needs a zone: MP4 stores an
-        # absolute instant, so an unanchored time would put video hours away
-        # from the stills shot beside it.
-        when = localise(dates[min(idx, len(dates) - 1)], rng.choice(city_pool))
-        dur = max(3.0, min(rng.uniform(*clip_seconds), remaining_video / bytes_per_sec))
-        if dur < 3.0:
-            break
-        name = f"TDG_{job_id}_{idx:05d}.mp4"
-        size = amplify.render_video(
-            os.path.join(out_dir, name), persona, when, idx, job_id,
-            vw, vh, vbitrate, dur,
-            seed_clip=os.path.join(seed_dir, rng.choice(clips)["file"]) if clips else None,
-            preset=preset, codec=video_codec)
-        item = record(name, "video", size, when, None, fmt="mp4/" + video_codec)
-        idx += 1
-        remaining_video -= size
-        bytes_per_sec = size / dur          # learn the real rate
-        video_i += 1
-        save([item])
-        if total >= target_bytes:
-            break
-        progress(f"  video {video_i}  {sizing.human(size)} ({dur:.1f}s)  "
-                 f"total {sizing.human(total)}")
+    vjobs = max(1, min(video_jobs or VIDEO_JOBS_CAP, VIDEO_JOBS_CAP))
+    with ProcessPoolExecutor(max_workers=vjobs) as vpool:
+        while phase == "video" and remaining_video >= bytes_per_sec * 3 \
+                and video_i < n_videos + 4:
+            # Plan a batch first, consuming the RNG in exactly the order a
+            # serial run would, then encode the batch in parallel. Durations
+            # within a batch are priced off one rate estimate rather than
+            # re-learned per clip; the trim stage still lands the pack exactly,
+            # because that is where exactness has always come from.
+            batch, planned = [], remaining_video
+            for _ in range(vjobs):
+                if planned < bytes_per_sec * 3 or video_i + len(batch) >= n_videos + 4:
+                    break
+                # A clip carries no GPS, but it still needs a zone: MP4 stores
+                # an absolute instant, so an unanchored time would put video
+                # hours away from the stills shot beside it.
+                when = localise(dates[min(idx, len(dates) - 1)],
+                                rng.choice(city_pool))
+                dur = max(3.0, min(rng.uniform(*clip_seconds),
+                                   planned / bytes_per_sec))
+                if dur < 3.0:
+                    break
+                name = f"TDG_{job_id}_{idx:05d}.mp4"
+                seed_clip = (os.path.join(seed_dir, rng.choice(clips)["file"])
+                             if clips else None)
+                batch.append((name, when, dur, (
+                    os.path.join(out_dir, name), persona, when, idx, job_id,
+                    vw, vh, vbitrate, dur, seed_clip, preset, video_codec)))
+                idx += 1
+                planned -= dur * bytes_per_sec
+            if not batch:
+                break
+
+            fresh, encoded, seconds = [], 0, 0.0
+            for (name, when, dur, _), (_, size) in zip(
+                    batch, vpool.map(_video_task, [b[3] for b in batch])):
+                fresh.append(record(name, "video", size, when, None,
+                                    fmt="mp4/" + video_codec))
+                remaining_video -= size
+                encoded += size
+                seconds += dur
+                video_i += 1
+            if seconds:
+                bytes_per_sec = encoded / seconds     # learn the real rate
+            save(fresh)
+            progress(f"  video {video_i}  {sizing.human(encoded)} in "
+                     f"{len(batch)} clip(s)  total {sizing.human(total)}")
+            if total >= target_bytes:
+                break
 
     # ---- photos -----------------------------------------------------------
     # Bounded by the photo budget rather than the whole target, so an

@@ -114,6 +114,46 @@ def main():
         check("hvc1" in out,
               "tagged hvc1, not hev1 — QuickTime and iOS Photos will not play hev1")
 
+    # ---- parallel video ---------------------------------------------------
+    print("parallel video")
+    if shutil.which("ffmpeg") is None:
+        print("  skip  (no ffmpeg)")
+    else:
+        # Clips are planned in a batch and encoded at once. Durations within a
+        # batch are priced off one rate estimate rather than re-learned per
+        # clip, so the exactness has to come from the trim stage — which is
+        # where it always came from.
+        pack = os.path.join(tmp, "vpar")
+        cli(["build", "--size", "80MB", "--out", pack, "--job", "vparjob",
+             "--seed", "5", "--photo-fraction", "0.15", "--video-jobs", "4",
+             "--min-clip", "4", "--max-clip", "4",
+             "--since", "2023-01-01", "--until", "2024-01-01", "--quiet"])
+        doc = json.load(open(os.path.join(pack, "manifest.json")))
+        check(doc["total_bytes"] == doc["target_bytes"],
+              "a pack built with parallel video still lands exactly")
+        check(doc["video_count"] >= 2,
+              f"and contains several clips ({doc['video_count']})")
+
+        # Same settings must still give the same pack.
+        pack2 = os.path.join(tmp, "vpar2")
+        cli(["build", "--size", "80MB", "--out", pack2, "--job", "vparjob",
+             "--seed", "5", "--photo-fraction", "0.15", "--video-jobs", "4",
+             "--min-clip", "4", "--max-clip", "4",
+             "--since", "2023-01-01", "--until", "2024-01-01", "--quiet"])
+        doc2 = json.load(open(os.path.join(pack2, "manifest.json")))
+        check([i["sha256"] for i in doc["items"]]
+              == [i["sha256"] for i in doc2["items"]],
+              "parallel video is still reproducible for the same seed")
+
+        # ...and --video-jobs is part of the checkpoint fingerprint, because
+        # changing it changes which durations get chosen.
+        from tdg import checkpoint as ck
+        a = ck.fingerprint(target=1, video_jobs=1)
+        b = ck.fingerprint(target=1, video_jobs=4)
+        check(a != b,
+              "--video-jobs is in the build fingerprint, so a part-built pack "
+              "cannot be resumed with a different setting")
+
     # ---- edge cases -------------------------------------------------------
     print("edge cases")
     pack = os.path.join(tmp, "edge")
