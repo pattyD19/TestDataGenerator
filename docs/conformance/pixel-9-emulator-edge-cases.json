@@ -1,0 +1,27 @@
+{
+  "job_id": "edge01",
+  "target": "emulator",
+  "device": "emulator-5554",
+  "verified_at": "2026-08-30T03:05:26+00:00",
+  "expected_files": 23,
+  "expected_bytes": 41943040,
+  "photo_count": 23,
+  "video_count": 0,
+  "indexed": 23,
+  "missing": [],
+  "capture_time_preserved": 21,
+  "dated_assets": 21,
+  "undated_assets": [
+    "TDG_edge01_00006.png",
+    "TDG_edge01_00009.jpg"
+  ],
+  "worst_delta_seconds": 0.944,
+  "album": "DCIM/TDG edge01",
+  "album_supported": true,
+  "album_note": null,
+  "expected_album": "TDG edge01",
+  "matched_by": "name",
+  "elapsed_seconds": 21.9,
+  "throughput_bytes_per_second": 1915207.3,
+  "passed": true
+}

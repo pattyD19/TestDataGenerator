@@ -10,6 +10,7 @@ import hashlib
 import math
 import os
 import random
+import shutil
 import subprocess
 
 from PIL import Image
@@ -34,14 +35,77 @@ def load_seed(path):
     return img
 
 
+# --- HEIC ------------------------------------------------------------------
+# HEIC is HEVC inside a HEIF container. Hand-rolling that is not the same kind
+# of job as hand-rolling an EXIF block, so this is the one place the generator
+# takes an encoder from outside — and it takes whichever is present rather than
+# requiring one.
+_HEIC_BACKEND = None
+
+
+def heic_backend():
+    """'pillow-heif', 'sips' or 'none'."""
+    global _HEIC_BACKEND
+    if _HEIC_BACKEND is None:
+        try:
+            import pillow_heif
+            pillow_heif.register_heif_opener()
+            _HEIC_BACKEND = "pillow-heif"
+        except Exception:
+            _HEIC_BACKEND = "sips" if shutil.which("sips") else "none"
+    return _HEIC_BACKEND
+
+
+def require_heic():
+    if heic_backend() == "none":
+        raise SystemExit(
+            "no HEIC encoder available.\n"
+            "  macOS ships `sips`, which this uses automatically.\n"
+            "  Anywhere else (a Linux build box, the Docker image):\n"
+            "    pip install pillow-heif")
+
+
+def _to_heic(jpeg_path, heic_path, quality):
+    """Convert a rendered JPEG to HEIC, carrying its EXIF across.
+
+    Verified against sips on macOS 26: DateTimeOriginal, the OffsetTime tags
+    and Make/Model all survive the conversion, which is what makes a HEIC pack
+    worth generating at all.
+    """
+    backend = heic_backend()
+    if backend == "pillow-heif":
+        img = Image.open(jpeg_path)
+        exif = img.info.get("exif")
+        img.save(heic_path, "HEIF", quality=quality,
+                 **({"exif": exif} if exif else {}))
+    else:
+        p = subprocess.run(
+            ["sips", "-s", "format", "heic", "-s", "formatOptions", str(quality),
+             jpeg_path, "--out", heic_path],
+            capture_output=True)
+        if p.returncode != 0 or not os.path.exists(heic_path):
+            raise RuntimeError(f"sips could not write HEIC: "
+                               f"{p.stderr.decode()[-300:]}")
+    os.remove(jpeg_path)
+    return os.path.getsize(heic_path)
+
+
 def _rng(job_id, index):
     h = hashlib.sha256(f"{job_id}:{index}".encode()).digest()
     return random.Random(int.from_bytes(h[:8], "big"))
 
 
 def render_photo(seed_path, out_path, persona, when, index, job_id,
-                 target_size=None, quality=None, gps=None):
-    """Crop/scale/jitter a seed still and write a JPEG with full EXIF."""
+                 target_size=None, quality=None, gps=None, fmt="jpeg",
+                 jitter=True):
+    """Crop/scale/jitter a seed still and write it with full EXIF.
+
+    `fmt` is "jpeg" or "heic". HEIC goes via a JPEG so the hand-rolled EXIF
+    writer stays the single source of metadata for both formats.
+
+    `jitter=False` reuses the same crop as index-1 would produce, which is what
+    makes a burst look like a burst rather than a set of unrelated frames.
+    """
     rng = _rng(job_id, index)
     src = load_seed(seed_path)
     tw, th = target_size or persona.still_sizes[0]
@@ -68,8 +132,11 @@ def render_photo(seed_path, out_path, persona, when, index, job_id,
     exposure = rng.choice([1 / 30, 1 / 60, 1 / 120, 1 / 250, 1 / 500])
 
     exif = build_exif(persona, when, tw, th, gps=gps, iso=iso, exposure=exposure)
-    img.save(out_path, "JPEG", quality=q, exif=exif, subsampling=rng.choice([0, 1, 2]),
+    jpeg_path = out_path if fmt == "jpeg" else out_path + ".tmp.jpg"
+    img.save(jpeg_path, "JPEG", quality=q, exif=exif, subsampling=rng.choice([0, 1, 2]),
              optimize=False, progressive=rng.random() < 0.2)
+    if fmt == "heic":
+        _to_heic(jpeg_path, out_path, q)
     set_mtime(out_path, when)
     return os.path.getsize(out_path)
 
@@ -82,11 +149,15 @@ def _ffmpeg(args):
 
 
 def render_video(out_path, persona, when, index, job_id,
-                 width, height, bitrate, duration, seed_clip=None, preset="ultrafast"):
+                 width, height, bitrate, duration, seed_clip=None,
+                 preset="ultrafast", codec="h264"):
     """Encode an MP4 at a near-exact byte size.
 
     bytes ~= (video_bitrate + audio_bitrate) * duration / 8, which is why video
     is the knob the size planner uses to land on a target.
+
+    `codec` is "h264" or "hevc". HEVC is what a modern iPhone actually records,
+    so it is the video half of closing the v1 format gap.
     """
     rng = _rng(job_id, index)
     abr = 128_000
@@ -99,10 +170,21 @@ def render_video(out_path, persona, when, index, job_id,
     # for packs containing video.
     noise_seed = rng.randrange(2 ** 31)
     life_seed = rng.randrange(2 ** 32)
+    if codec == "hevc":
+        # `hvc1` rather than the default `hev1`: QuickTime and iOS Photos will
+        # not play an hev1-tagged track, and a clip the gallery cannot render
+        # is not much of a test asset.
+        vcodec = ["-c:v", "libx265", "-tag:v", "hvc1",
+                  "-x265-params",
+                  f"log-level=error:vbv-maxrate={bitrate // 1000}:"
+                  f"vbv-bufsize={bitrate // 500}"]
+    else:
+        vcodec = ["-c:v", "libx264",
+                  "-x264-params", "nal-hrd=cbr:force-cfr=1"]
     common = [
-        "-c:v", "libx264", "-preset", preset, "-pix_fmt", "yuv420p",
+        *vcodec, "-preset", preset, "-pix_fmt", "yuv420p",
         "-b:v", str(bitrate), "-minrate", str(bitrate), "-maxrate", str(bitrate),
-        "-bufsize", str(bitrate * 2), "-x264-params", "nal-hrd=cbr:force-cfr=1",
+        "-bufsize", str(bitrate * 2),
         "-c:a", "aac", "-b:a", str(abr), "-ar", "48000", "-ac", "2",
         "-movflags", "+faststart",
         "-metadata", f"creation_time={ffmpeg_time(when)}",

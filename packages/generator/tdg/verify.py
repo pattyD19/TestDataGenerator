@@ -87,12 +87,16 @@ def _probe_emulator(doc, receipt, device):
              f"--where \"_display_name like '{prefix}%'\"")
         out = loader.adb(["shell", q], device=device, check=False).stdout
         for line in out.splitlines():
-            m = re.search(r"_display_name=(\S+?), datetaken=(-?\d+)", line)
+            m = re.search(r"_display_name=(.+?), datetaken=(\S*?)(?:, |$)", line)
             if not m:
                 continue
-            name, taken = m.group(1), int(m.group(2))
-            found[name] = datetime.datetime.fromtimestamp(
-                taken / 1000, datetime.timezone.utc)
+            name, taken = m.group(1), m.group(2)
+            # MediaStore fills DATE_TAKEN from EXIF. A screenshot or a
+            # zero-byte file has none, so the column is NULL — the asset is
+            # still indexed, it simply has no capture time to compare.
+            found[name] = (datetime.datetime.fromtimestamp(
+                int(taken) / 1000, datetime.timezone.utc)
+                if taken.lstrip("-").isdigit() else None)
             a = re.search(r"relative_path=([^,]+)", line)
             if a:
                 albums.add(a.group(1).strip().rstrip("/"))
@@ -182,19 +186,21 @@ def verify(pack_dir, target, device=None, receipt=None):
     want = _manifest_instants(doc)
     got = probe["indexed"]
 
+    undated = sorted(n for n, v in got.items() if v is None)
     if probe["matched_by"] == "name":
         missing = sorted(set(want) - set(got))
         deltas = [abs((got[n] - want[n]).total_seconds())
-                  for n in want if n in got]
+                  for n in want if got.get(n) is not None]
     else:
         # Compare sorted instants pairwise; names do not survive the import.
         w = sorted(want.values())
-        g = sorted(got.values())
+        g = sorted(v for v in got.values() if v is not None)
         missing = [f"{len(w) - len(g)} asset(s) unaccounted for"] if len(g) < len(w) else []
         deltas = [abs((a - b).total_seconds()) for a, b in zip(g, w)]
 
     worst = max(deltas) if deltas else None
     preserved = sum(1 for d in deltas if d <= TOLERANCE_SECONDS)
+    dated = len(deltas)
     elapsed = receipt.get("elapsed_seconds") or 0.0
 
     return {
@@ -209,6 +215,8 @@ def verify(pack_dir, target, device=None, receipt=None):
         "indexed": len(got),
         "missing": missing[:10],
         "capture_time_preserved": preserved,
+        "dated_assets": dated,
+        "undated_assets": undated,
         "worst_delta_seconds": round(worst, 3) if worst is not None else None,
         "album": probe["album"],
         "album_supported": probe.get("album_supported", True),
@@ -218,8 +226,12 @@ def verify(pack_dir, target, device=None, receipt=None):
         "elapsed_seconds": round(elapsed, 2),
         "throughput_bytes_per_second":
             round(doc["total_bytes"] / elapsed, 1) if elapsed else None,
+        # Every asset must be indexed and every asset that *has* a capture
+        # time must have kept it. An asset with no EXIF — a screenshot, a
+        # zero-byte file — has no capture time to lose, and failing the run
+        # for that would be reporting normal platform behaviour as a defect.
         "passed": (len(got) == doc["file_count"]
-                   and preserved == doc["file_count"]
+                   and preserved == dated
                    and not missing),
     }
 
@@ -228,7 +240,7 @@ def summarise(r):
     """A human-readable block; the same numbers as the JSON."""
     tick = lambda ok: "PASS" if ok else "FAIL"
     indexed_ok = r["indexed"] == r["expected_files"]
-    dates_ok = r["capture_time_preserved"] == r["expected_files"]
+    dates_ok = r["capture_time_preserved"] == r["dated_assets"]
     lines = [
         f"job {r['job_id']}  ->  {r['target']} {r['device'] or ''}".rstrip(),
         f"  {r['expected_files']} files expected "
@@ -237,9 +249,12 @@ def summarise(r):
         "",
         f"  assets indexed         {r['indexed']}/{r['expected_files']}"
         f"   [{tick(indexed_ok)}]",
-        f"  capture time preserved {r['capture_time_preserved']}/{r['expected_files']}"
+        f"  capture time preserved {r['capture_time_preserved']}/{r['dated_assets']}"
         + (f"   (worst delta {r['worst_delta_seconds']}s)" if r['worst_delta_seconds'] is not None else "")
-        + f"   [{tick(dates_ok)}]",
+        + f"   [{tick(dates_ok)}]"
+        + (f"\n  no capture time         {len(r['undated_assets'])} asset(s) carry no "
+           f"EXIF date (a screenshot or an empty file has none)"
+           if r["undated_assets"] else ""),
         f"  album grouping         " + (
             f"{r['album']}   (expected {r['expected_album']})"
             if r["album_supported"] else f"n/a — {r['album_note']}"),
@@ -261,7 +276,7 @@ def markdown(r, label=None):
     title = label or f"{r['target']} {r['device'] or ''}".strip()
     rate = (sizing.human(r["throughput_bytes_per_second"]) + "/s"
             if r["throughput_bytes_per_second"] else "—")
-    return "\n".join([
+    rows = [
         f"# Conformance — {title}",
         "",
         f"- job `{r['job_id']}` · {r['expected_files']} files "
@@ -275,9 +290,11 @@ def markdown(r, label=None):
         f"| assets indexed | {r['indexed']} / {r['expected_files']} | "
         f"{ok(r['indexed'] == r['expected_files'])} |",
         f"| capture time preserved | {r['capture_time_preserved']} / "
-        f"{r['expected_files']}"
+        f"{r['dated_assets']} dated"
         + (f", worst delta {r['worst_delta_seconds']}s" if r['worst_delta_seconds'] is not None else "")
-        + f" | {ok(r['capture_time_preserved'] == r['expected_files'])} |",
+        + f" | {ok(r['capture_time_preserved'] == r['dated_assets'])} |",
+        (f"| assets with no capture time | {len(r['undated_assets'])} — no EXIF "
+         f"date to carry | — |") if r["undated_assets"] else None,
         (f"| album grouping | {r['album']} | "
          f"{ok(bool(r['album']))} |") if r["album_supported"] else
         (f"| album grouping | n/a — {r['album_note']} | — |"),
@@ -285,4 +302,5 @@ def markdown(r, label=None):
         "",
         f"**{'PASSED' if r['passed'] else 'FAILED'}**",
         "",
-    ])
+    ]
+    return "\n".join(x for x in rows if x is not None)

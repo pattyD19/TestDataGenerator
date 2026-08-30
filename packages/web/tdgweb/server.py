@@ -252,7 +252,10 @@ class Handler(BaseHTTPRequestHandler):
         # Loaders should not have to know how the server lays out URLs.
         base = f"/api/jobs/{jid}/files"
         for item in doc["items"]:
-            item["url"] = f"{base}/{item['name']}?token={job['token']}"
+            # Percent-encode: a non-ASCII or space-bearing name has to survive
+            # being put in a URL and taken out again.
+            quoted = urllib.parse.quote(item["name"])
+            item["url"] = f"{base}/{quoted}?token={job['token']}"
         doc["pack_base_url"] = base
         return self._json(doc)
 
@@ -262,9 +265,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._fail(404, "no such job")
         if not self._authorised(job, query):
             return self._fail(403, "bad or missing token")
-        name = posixpath.normpath(name)
-        if not SAFE_NAME.match(name):
-            return self._fail(400, "bad file name")
+        # Allowlist from the manifest rather than a character class. A pack can
+        # legitimately contain "TDG_x_00007_café_日本語.jpg" — the edge-case
+        # pack exists to prove non-ASCII names survive every layer — and an
+        # ASCII-only regex rejected exactly the file it was meant to carry.
+        # Matching against the manifest is also strictly safer than a pattern:
+        # nothing outside the pack's own inventory can be named at all.
+        name = urllib.parse.unquote(posixpath.normpath(name))
+        manifest_path = os.path.join(job["pack_dir"], "manifest.json")
+        allowed = set()
+        if os.path.exists(manifest_path):
+            with open(manifest_path) as fh:
+                allowed = {i["name"] for i in json.load(fh)["items"]}
+        allowed |= {"manifest.json", "LICENSES.csv"}
+        if name not in allowed:
+            return self._fail(404, "not in this pack")
         path = os.path.join(job["pack_dir"], name)
         if not os.path.isfile(path):
             return self._fail(404, "not in this pack")

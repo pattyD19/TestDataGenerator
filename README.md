@@ -40,7 +40,7 @@ python3 -m tdg.cli wipe --job <id>
 | 4 | Android loader app | done — verified on an Android 17 emulator, not yet a physical handset |
 | 5 | iOS loader app | done — verified on an iOS 26.5 simulator; no signing identity here, so untested on a physical iPhone |
 | 6 | Conformance harness | harness done; 2 of 6 devices verified, both emulated |
-| 7 | HEIC/HEVC and realism | not started |
+| 7 | HEIC/HEVC and realism | formats done and verified; Live Photos and the 4 GB file outstanding |
 
 ## The mark
 
@@ -67,5 +67,6 @@ No third-party runner; each suite is a plain script.
 python3 packages/generator/tests/test_exif.py      # capture times and EXIF
 python3 packages/generator/tests/test_loader.py    # device loaders, via fakes
 python3 packages/generator/tests/test_resume.py    # interrupted builds
+python3 packages/generator/tests/test_formats.py   # HEIC, HEVC, edge cases
 python3 packages/web/tests/test_server.py          # the control plane
 ```

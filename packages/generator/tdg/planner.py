@@ -2,6 +2,7 @@
 import json
 import os
 import random
+import shutil
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -42,15 +43,55 @@ def capture_dates(count, since: datetime, until: datetime, rng):
 
 def _photo_task(args):
     """Top-level so it survives pickling into the worker pool."""
-    (seed_path, out_path, persona, when, index, job_id, gps) = args
-    size = amplify.render_photo(seed_path, out_path, persona, when, index, job_id, gps=gps)
+    (seed_path, out_path, persona, when, index, job_id, gps, fmt) = args
+    size = amplify.render_photo(seed_path, out_path, persona, when, index, job_id,
+                                gps=gps, fmt=fmt)
     return out_path, size
+
+
+PHOTO_EXT = {"jpeg": "jpg", "heic": "heic"}
+
+
+def _screenshot(path, when, size=(1170, 2532)):
+    """A screenshot, which is nothing like a photograph.
+
+    Flat colour, hard edges, PNG, and **no camera EXIF at all** — that last
+    part is the point. An app that assumes every library asset has a Make and a
+    DateTimeOriginal falls over on the screenshots every real phone is full of.
+    """
+    from PIL import Image, ImageDraw
+    w, h = size
+    img = Image.new("RGB", (w, h), (247, 246, 243))
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, w, int(h * 0.06)], fill=(28, 30, 34))          # status bar
+    d.rectangle([0, int(h * 0.06), w, int(h * 0.20)], fill=(47, 93, 80))
+    for i in range(7):                                                # list rows
+        y = int(h * 0.24) + i * int(h * 0.09)
+        d.rounded_rectangle([int(w * 0.06), y, int(w * 0.94), y + int(h * 0.07)],
+                            radius=18, fill=(255, 255, 255),
+                            outline=(226, 222, 214), width=2)
+        d.rectangle([int(w * 0.10), y + int(h * 0.02),
+                     int(w * (0.30 + 0.35 * ((i * 7) % 5) / 5)),
+                     y + int(h * 0.028)], fill=(200, 198, 192))
+    d.rectangle([0, int(h * 0.93), w, h], fill=(240, 238, 234))
+    img.save(path, "PNG", optimize=False)
+    set_mtime(path, when)
+    return os.path.getsize(path)
+
+
+def _photo_fmt(photo_format, rng):
+    """Per-item format. 'mixed' is the interesting case for an app under test:
+    a real iPhone library is HEIC, but anything shared into it arrives JPEG."""
+    if photo_format == "mixed":
+        return "heic" if rng.random() < 0.5 else "jpeg"
+    return photo_format
 
 
 def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
                photo_fraction=0.70, since=None, until=None, job_id=None,
                seed=1, video_mode=None, clip_seconds=(20, 60), preset="ultrafast",
-               jobs=None, progress=print, restart=False):
+               jobs=None, progress=print, restart=False,
+               photo_format="jpeg", video_codec="h264", edge_cases=False):
     persona = PERSONAS[persona_key]
     rng = random.Random(seed)
     job_id = job_id or f"{rng.randrange(16**6):06x}"
@@ -71,6 +112,8 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
         since=since.isoformat(), until=until.isoformat() if until_explicit else None,
         job=job_id, seed=seed, video_mode=video_mode,
         clips=list(clip_seconds), preset=preset,
+        photo_format=photo_format, video_codec=video_codec,
+        edge_cases=edge_cases,
         seeds=os.path.abspath(seed_dir))
 
     resuming = head is not None
@@ -166,18 +209,22 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
         """Anchor a naive capture time to the city it was 'taken' in."""
         return when.replace(tzinfo=city[3])
 
-    def record(name, kind, size, when, gps):
+    def record(name, kind, size, when, gps, fmt=None, note=None):
         nonlocal total
         path = os.path.join(out_dir, name)
         item = {
             "name": name,
             "kind": kind,
+            "format": fmt or ("mp4/" + video_codec if kind == "video"
+                              else PHOTO_EXT.get(photo_format, "jpg")),
             "bytes": size,
             "sha256": manifest.sha256_file(path),
             "taken_at": when.isoformat(timespec="seconds"),
             "taken_at_utc": when.astimezone(timezone.utc).isoformat(timespec="seconds"),
             "gps": {"lat": round(gps[0], 6), "lon": round(gps[1], 6)} if gps else None,
         }
+        if note:
+            item["note"] = note      # why this file is odd, for the edge pack
         items.append(item)
         total += size
         return item
@@ -199,8 +246,8 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
             os.path.join(out_dir, name), persona, when, idx, job_id,
             vw, vh, vbitrate, dur,
             seed_clip=os.path.join(seed_dir, rng.choice(clips)["file"]) if clips else None,
-            preset=preset)
-        item = record(name, "video", size, when, None)
+            preset=preset, codec=video_codec)
+        item = record(name, "video", size, when, None, fmt="mp4/" + video_codec)
         idx += 1
         remaining_video -= size
         bytes_per_sec = size / dur          # learn the real rate
@@ -228,6 +275,100 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
     if phase == "video":
         phase = "photo"
 
+    def build_edge_cases():
+        """The files that break naive gallery code.
+
+        Deliberately generated *before* the bulk of the photos, so their bytes
+        are inside the budget the size planner is working to rather than an
+        overshoot it has to absorb afterwards.
+        """
+        nonlocal idx
+        fresh = []
+        city = rng.choice(city_pool)
+        base_when = localise(dates[min(idx, len(dates) - 1)], city)
+        gps = (city[1], city[2])
+        small = (persona.still_sizes[0][0] // 3, persona.still_sizes[0][1] // 3)
+
+        # A burst: the same scene, a few tenths of a second apart. Timeline and
+        # "best of" grouping features are exactly what this exercises.
+        for k in range(5):
+            when = base_when + timedelta(milliseconds=380 * k)
+            name = f"TDG_{job_id}_{idx:05d}.jpg"
+            size = amplify.render_photo(
+                os.path.join(seed_dir, stills[0]["file"]),
+                os.path.join(out_dir, name), persona, when, 7000, job_id,
+                target_size=small, quality=88, gps=gps, fmt="jpeg")
+            fresh.append(record(name, "image", size, when, gps, fmt="jpeg",
+                                note="burst frame %d of 5" % (k + 1)))
+            idx += 1
+
+        # An exact byte-for-byte duplicate. Everything else in a pack is
+        # re-encoded precisely so no two files collide; this one exists to give
+        # a dedupe implementation something to find.
+        src = fresh[0]
+        dup_name = f"TDG_{job_id}_{idx:05d}.jpg"
+        shutil.copy2(os.path.join(out_dir, src["name"]),
+                     os.path.join(out_dir, dup_name))
+        fresh.append(record(dup_name, "image", src["bytes"],
+                            datetime.fromisoformat(src["taken_at"]), gps,
+                            fmt="jpeg", note="exact duplicate of " + src["name"]))
+        idx += 1
+
+        # A screenshot: no camera EXIF at all.
+        when = base_when + timedelta(hours=3)
+        shot_name = f"TDG_{job_id}_{idx:05d}.png"
+        size = _screenshot(os.path.join(out_dir, shot_name), when)
+        fresh.append(record(shot_name, "image", size, when, None, fmt="png",
+                            note="screenshot: PNG, no camera EXIF"))
+        idx += 1
+
+        # A non-ASCII filename. Every layer that shells out or builds a URL
+        # gets a vote on whether this works.
+        when = base_when + timedelta(hours=5)
+        uni_name = f"TDG_{job_id}_{idx:05d}_café_日本語.jpg"
+        size = amplify.render_photo(
+            os.path.join(seed_dir, stills[0]["file"]),
+            os.path.join(out_dir, uni_name), persona, when, 7100, job_id,
+            target_size=small, quality=85, gps=gps, fmt="jpeg")
+        fresh.append(record(uni_name, "image", size, when, gps, fmt="jpeg",
+                            note="non-ASCII filename"))
+        idx += 1
+
+        # Truncated: a valid JPEG header over a body that stops early. Decoders
+        # should fail gracefully rather than hang or crash.
+        when = base_when + timedelta(hours=7)
+        trunc_name = f"TDG_{job_id}_{idx:05d}.jpg"
+        tmp = os.path.join(out_dir, trunc_name + ".full")
+        amplify.render_photo(
+            os.path.join(seed_dir, stills[0]["file"]), tmp, persona, when,
+            7200, job_id, target_size=small, quality=80, gps=gps, fmt="jpeg")
+        with open(tmp, "rb") as fh:
+            blob = fh.read()
+        os.remove(tmp)
+        with open(os.path.join(out_dir, trunc_name), "wb") as fh:
+            fh.write(blob[: max(1024, len(blob) // 3)])
+        set_mtime(os.path.join(out_dir, trunc_name), when)
+        fresh.append(record(trunc_name, "image",
+                            os.path.getsize(os.path.join(out_dir, trunc_name)),
+                            when, gps, fmt="jpeg",
+                            note="truncated: valid header, body cut short"))
+        idx += 1
+
+        # Zero bytes. Real libraries contain these after a failed copy.
+        when = base_when + timedelta(hours=9)
+        zero_name = f"TDG_{job_id}_{idx:05d}.jpg"
+        open(os.path.join(out_dir, zero_name), "wb").close()
+        set_mtime(os.path.join(out_dir, zero_name), when)
+        fresh.append(record(zero_name, "image", 0, when, None, fmt="jpeg",
+                            note="zero bytes"))
+        idx += 1
+
+        progress(f"  edge cases {len(fresh)}  total {sizing.human(total)}")
+        save(fresh)
+
+    if edge_cases and phase == "photo" and not any(i.get("note") for i in items):
+        build_edge_cases()
+
     def next_task():
         nonlocal idx
         city = rng.choice(city_pool)
@@ -235,11 +376,12 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
         # No GPS on a quarter of them — location services off, indoors, or the
         # photo predates the permission. The zone still comes from the city.
         gps = (city[1], city[2]) if rng.random() < 0.75 else None
-        name = f"TDG_{job_id}_{idx:05d}.jpg"
+        fmt = _photo_fmt(photo_format, rng)
+        name = f"TDG_{job_id}_{idx:05d}.{PHOTO_EXT[fmt]}"
         task = (os.path.join(seed_dir, rng.choice(stills)["file"]),
-                os.path.join(out_dir, name), persona, when, idx, job_id, gps)
+                os.path.join(out_dir, name), persona, when, idx, job_id, gps, fmt)
         idx += 1
-        return name, when, gps, task
+        return name, when, gps, task, fmt
 
     with ProcessPoolExecutor(max_workers=jobs) as pool:
         while phase == "photo":
@@ -247,16 +389,20 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
             # Size the batch off the LARGEST photo seen, not the average.
             # Averages overshoot: JPEG sizes spread ~1.7-2.8 MB on the same
             # persona, so a batch priced at the mean lands over the ceiling.
-            worst = max((i["bytes"] for i in items if i["kind"] == "image"),
+            # Only *ordinary* photos may inform the estimate. The edge cases
+            # are deliberately tiny, and letting a 250 KB burst frame set the
+            # price of the next batch made a 40 MB pack land at 124 MB.
+            worst = max((i["bytes"] for i in items
+                         if i["kind"] == "image" and not i.get("note")),
                         default=est_photo * 1.4)
             n = int(remaining / worst)
             if n >= 2:
                 n = min(n, jobs * 4)
                 batch = [next_task() for _ in range(n)]
                 fresh = []
-                for (name, when, gps, _), (_, size) in zip(
+                for (name, when, gps, _, fmt), (_, size) in zip(
                         batch, pool.map(_photo_task, [b[3] for b in batch])):
-                    fresh.append(record(name, "image", size, when, gps))
+                    fresh.append(record(name, "image", size, when, gps, fmt=fmt))
                 made += n
                 save(fresh)
                 progress(f"  photos {made}  total {sizing.human(total)} / "
@@ -264,7 +410,7 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
                 continue
 
             # Tail: one at a time, discarding any file that would overshoot.
-            name, when, gps, task = next_task()
+            name, when, gps, task, fmt = next_task()
             _, size = _photo_task(task)
             if total + size > photo_ceiling:
                 os.remove(task[1])
@@ -273,7 +419,7 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
                 save([])
                 break
             made += 1
-            save([record(name, "image", size, when, gps)])
+            save([record(name, "image", size, when, gps, fmt=fmt)])
 
     # ---- trim to the exact target ----------------------------------------
     # Video absorbs a large deficit cheaply, but only above a floor: a
@@ -292,8 +438,8 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
             os.path.join(out_dir, name), persona, when, idx, job_id,
             vw, vh, vbitrate, dur,
             seed_clip=os.path.join(seed_dir, rng.choice(clips)["file"]) if clips else None,
-            preset=preset)
-        item = record(name, "video", size, when, None)
+            preset=preset, codec=video_codec)
+        item = record(name, "video", size, when, None, fmt="mp4/" + video_codec)
         idx += 1
         bytes_per_sec = size / dur
         deficit = target_bytes - total
@@ -318,7 +464,8 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
             h = max(240, int(persona.still_sizes[0][1] * scale))
             size = amplify.render_photo(
                 os.path.join(seed_dir, rng.choice(stills)["file"]), path,
-                persona, when, idx, job_id, target_size=(w, h), quality=q, gps=gps)
+                persona, when, idx, job_id, target_size=(w, h), quality=q, gps=gps,
+                fmt="jpeg")   # COM padding below is a JPEG trick
             if size <= chunk:
                 break
         if size > chunk:
@@ -326,7 +473,7 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
             break                       # cannot go smaller; accept the delta
         size = sizing.pad_jpeg_to(path, chunk)
         set_mtime(path, when)
-        item = record(name, "image", size, when, gps)
+        item = record(name, "image", size, when, gps, fmt="jpeg")
         idx += 1
         deficit = target_bytes - total
         save([item])

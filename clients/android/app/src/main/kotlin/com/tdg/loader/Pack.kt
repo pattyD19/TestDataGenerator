@@ -22,6 +22,7 @@ data class PackItem(
         get() = when {
             isVideo -> "video/mp4"
             name.endsWith(".heic", true) -> "image/heic"
+            name.endsWith(".png", true) -> "image/png"
             else -> "image/jpeg"
         }
 

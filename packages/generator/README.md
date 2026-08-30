@@ -57,6 +57,48 @@ totals a loader checks against free space *before* writing anything.
 | `--jobs` | Parallel photo encoders; defaults to CPU count. |
 | `--preset` | x264 preset. `ultrafast` keeps large packs practical; `medium` if you care about how the video actually looks. |
 
+## Formats
+
+| Flag | Values | |
+|---|---|---|
+| `--photo-format` | `jpeg` (default), `heic`, `mixed` | HEIC is what a real iPhone shoots. `mixed` is the realistic library: HEIC from the camera, JPEG from everything shared into it. |
+| `--video-codec` | `h264` (default), `hevc` | HEVC is what a modern phone records. Tagged `hvc1`, not `hev1` — QuickTime and iOS Photos will not play the latter. |
+
+HEIC goes out through a JPEG, so the hand-rolled EXIF writer stays the single
+source of metadata for both formats. Verified: `DateTimeOriginal`, all three
+`OffsetTime` tags and `Make`/`Model` survive the conversion intact.
+
+HEIC is the one thing the generator does not hand-roll — it is HEVC inside a
+HEIF container, which is a different order of job from writing an EXIF block.
+It uses whichever encoder is present rather than requiring one:
+
+1. `pillow-heif`, if installed — works anywhere
+2. `sips`, on macOS — no install at all
+3. otherwise it refuses with the `pip install pillow-heif` line
+
+So a Linux build box or the Docker image needs `pip install pillow-heif` for
+HEIC. Everything else stays dependency-free.
+
+## Edge cases (`--edge-cases`)
+
+The files that break naive gallery code. Ten of them, generated before the bulk
+of the pack so their bytes sit inside the size budget:
+
+| | Why |
+|---|---|
+| a 5-frame burst | same scene 380 ms apart — timeline and "best of" grouping |
+| an exact duplicate | everything else is re-encoded so nothing collides; this one exists for a dedupe implementation to find |
+| a screenshot | PNG, flat colour, and **no camera EXIF at all** |
+| a non-ASCII filename | `café_日本語.jpg` — every layer that shells out or builds a URL gets a vote |
+| a truncated JPEG | valid header, body cut short |
+| a zero-byte file | what a failed copy leaves behind |
+
+Two of these found real bugs on their first run. The non-ASCII name was
+rejected by the control plane's ASCII-only file route, which now allowlists
+against the manifest instead — stricter *and* more permissive. And the
+screenshot and zero-byte file have no EXIF, so Android leaves `DATE_TAKEN`
+null; `tdg verify` used to count them as missing rather than as undated.
+
 ## How it hits an exact size
 
 JPEG size is content-dependent, so nothing is estimated twice. Videos are
@@ -204,6 +246,7 @@ app. See [docs/conformance](../../docs/conformance/).
 python3 packages/generator/tests/test_loader.py
 python3 packages/generator/tests/test_exif.py
 python3 packages/generator/tests/test_resume.py
+python3 packages/generator/tests/test_formats.py
 ```
 
 No third-party runner. The device targets are covered by fake `adb` and `xcrun`

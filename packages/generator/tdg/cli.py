@@ -43,6 +43,8 @@ def cmd_build(args):
         until=datetime.fromisoformat(args.until) if args.until else None,
         job_id=args.job, seed=args.seed, preset=args.preset, jobs=args.jobs,
         clip_seconds=(args.min_clip, args.max_clip), restart=args.restart,
+        photo_format=args.photo_format, video_codec=args.video_codec,
+        edge_cases=args.edge_cases,
         progress=(lambda m: None) if args.quiet else print)
     dt = time.time() - started
     delta = doc["delta_bytes"]
@@ -180,6 +182,15 @@ def main(argv=None):
     g.add_argument("--max-clip", type=float, default=60)
     g.add_argument("--jobs", type=int, default=None,
                    help="parallel photo encoders (default: CPU count)")
+    g.add_argument("--photo-format", default="jpeg",
+                   choices=("jpeg", "heic", "mixed"),
+                   help="HEIC is what a real iPhone shoots; 'mixed' is the "
+                        "realistic library, where shared images arrive as JPEG")
+    g.add_argument("--video-codec", default="h264", choices=("h264", "hevc"),
+                   help="HEVC is what a modern phone records")
+    g.add_argument("--edge-cases", action="store_true",
+                   help="add the awkward files: duplicates, zero-byte, "
+                        "truncated, unicode names, a burst run, a screenshot")
     g.add_argument("--restart", action="store_true",
                    help="discard a partial build in --out and start over "
                         "(a matching partial build is otherwise resumed)")
