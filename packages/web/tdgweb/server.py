@@ -23,6 +23,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import presets
+from . import prune as prune_mod
 from .runner import GENERATOR, sizing            # noqa: F401
 from .store import Store
 from .runner import Runner
@@ -30,6 +31,13 @@ from .runner import Runner
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
 SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+
+# Every route in the pack half answers a pruned pack the same way. A loader
+# mid-transfer only ever fetches files, so if this were on the manifest route
+# alone the case that actually happens in the field would be the one route
+# that could not explain itself.
+PRUNED_GONE = ("this pack was pruned to reclaim disk — "
+               "rebuild the job to load it again")
 
 
 def lan_address(port):
@@ -106,6 +114,8 @@ class Handler(BaseHTTPRequestHandler):
                 })
             if path == "/api/jobs":
                 return self._json([self._public(j) for j in self.server.store.list()])
+            if path == "/api/prune":
+                return self._prune_survey(query)
             if parts[:2] == ["api", "pair"] and len(parts) == 3:
                 return self._pair(parts[2])
             if parts[:2] == ["api", "jobs"] and len(parts) == 3:
@@ -131,12 +141,24 @@ class Handler(BaseHTTPRequestHandler):
         parts = [p for p in urllib.parse.urlparse(self.path).path.split("/") if p]
         if parts == ["api", "jobs"]:
             return self._create()
+        if parts == ["api", "prune"]:
+            return self._prune_all()
         if parts[:2] == ["api", "jobs"] and len(parts) == 4:
             jid, action = parts[2], parts[3]
             if action == "cancel":
                 return self._cancel(jid)
             if action == "resume":
                 return self._resume(jid)
+            if action == "prune":
+                return self._prune_one(jid)
+        return self._fail(404, "no such route")
+
+    def do_DELETE(self):
+        url = urllib.parse.urlparse(self.path)
+        parts = [p for p in url.path.split("/") if p]
+        query = urllib.parse.parse_qs(url.query)
+        if parts[:2] == ["api", "jobs"] and len(parts) == 3:
+            return self._delete_job(parts[2], query)
         return self._fail(404, "no such route")
 
     # -- handlers -----------------------------------------------------------
@@ -181,7 +203,20 @@ class Handler(BaseHTTPRequestHandler):
         """
         job = self.server.store.by_token(code)
         if job is None:
-            return self._fail(404, "no finished pack has that code")
+            # The code may still be a real one whose pack is not servable. A
+            # loader can only give a useful message if the refusal says which,
+            # so answer the actual question rather than a blanket 404.
+            other = self.server.store.by_token_any(code)
+            if other is None:
+                return self._fail(404, "no pack has that code")
+            if other["status"] == "pruned":
+                return self._fail(410, "that pack was pruned to reclaim disk. "
+                                       "Rebuild the job, then pair again")
+            if other["status"] in ("queued", "running"):
+                return self._fail(409, "that pack is still building — "
+                                       "pair again when it finishes")
+            return self._fail(409, f"that pack did not finish building "
+                                   f"(status {other['status']})")
         pub = self._public(job)
         return self._json({
             "id": job["id"],
@@ -226,6 +261,70 @@ class Handler(BaseHTTPRequestHandler):
         self.server.runner.start(jid)
         return self._json(self._public(self.server.store.get(jid)))
 
+    # -- reclaiming disk ----------------------------------------------------
+
+    def _truthy(self, query, key):
+        v = (query.get(key) or ["0"])[0].lower()
+        return v in ("1", "true", "yes", "on")
+
+    def _prune_survey(self, query):
+        """What could be reclaimed, and how much it would free.
+
+        Separate from /api/jobs because it stats every file in every pack, and
+        the job list is polled every few seconds.
+        """
+        force = self._truthy(query, "force")
+        rows = prune_mod.survey(self.server.store, self.server.packs_dir,
+                                self.server.runner, include_partial=force)
+        total = prune_mod.reclaimable(rows)
+        return self._json({
+            "jobs": rows,
+            "eligible": sum(1 for r in rows if r["eligible"]),
+            "reclaimable_bytes": total,
+            "reclaimable_human": sizing.human(total),
+        })
+
+    def _prune_one(self, jid):
+        """POST /api/jobs/<id>/prune — delete the pack, keep the job."""
+        url = urllib.parse.urlparse(self.path)
+        query = urllib.parse.parse_qs(url.query)
+        try:
+            out = prune_mod.prune_job(
+                self.server.store, self.server.packs_dir, jid,
+                drop_row=False, force=self._truthy(query, "force"),
+                runner=self.server.runner)
+        except KeyError:
+            return self._fail(404, "no such job")
+        except prune_mod.PruneError as exc:
+            return self._fail(exc.code, str(exc))
+        out["freed_human"] = sizing.human(out["freed_bytes"])
+        return self._json(out)
+
+    def _prune_all(self):
+        """POST /api/prune — reclaim everything eligible in one pass."""
+        body = self._body()
+        if body is None:
+            return self._fail(400, "body must be JSON")
+        out = prune_mod.prune_all(
+            self.server.store, self.server.packs_dir, self.server.runner,
+            drop_rows=bool(body.get("drop_rows")),
+            force=bool(body.get("force")))
+        return self._json(out)
+
+    def _delete_job(self, jid, query):
+        """DELETE /api/jobs/<id> — the pack and the row together."""
+        try:
+            out = prune_mod.prune_job(
+                self.server.store, self.server.packs_dir, jid,
+                drop_row=True, force=self._truthy(query, "force"),
+                runner=self.server.runner)
+        except KeyError:
+            return self._fail(404, "no such job")
+        except prune_mod.PruneError as exc:
+            return self._fail(exc.code, str(exc))
+        out["freed_human"] = sizing.human(out["freed_bytes"])
+        return self._json(out)
+
     # -- the pack half ------------------------------------------------------
 
     def _authorised(self, job, query):
@@ -246,6 +345,11 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorised(job, query):
             return self._fail(403, "bad or missing token")
         path = os.path.join(job["pack_dir"], "manifest.json")
+        if job["status"] == "pruned":
+            # 410, not 409: the pack existed and is deliberately gone. Saying
+            # "not built yet" about a job the list shows as finished sends
+            # whoever hits it looking for a build that already ran.
+            return self._fail(410, PRUNED_GONE)
         if not os.path.exists(path):
             return self._fail(409, f"pack is not built yet (status {job['status']})")
         with open(path) as fh:
@@ -266,6 +370,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._fail(404, "no such job")
         if not self._authorised(job, query):
             return self._fail(403, "bad or missing token")
+        # A prune deletes the manifest, so the allowlist below would be empty
+        # and every name would come back "not in this pack" — which is false,
+        # and is what a device sees when a pack is pruned mid-fill. Answer the
+        # real reason before the allowlist can misreport it.
+        if job["status"] == "pruned":
+            return self._fail(410, PRUNED_GONE)
         # Allowlist from the manifest rather than a character class. A pack can
         # legitimately contain "TDG_x_00007_café_日本語.jpg" — the edge-case
         # pack exists to prove non-ASCII names survive every layer — and an

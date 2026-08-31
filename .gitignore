@@ -22,3 +22,6 @@ clients/ios/build-device/
 clients/ios/DerivedData/
 *.xcuserdatad
 clients/ios/Signing.xcconfig
+
+# PowerPoint lock files, created whenever a deck is open
+~$*

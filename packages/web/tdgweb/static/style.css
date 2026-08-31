@@ -103,6 +103,17 @@ button[type="submit"][disabled] { opacity: 0.55; cursor: progress; }
 .status.running { border-color: var(--accent); color: var(--accent); }
 .status.done { background: var(--ok); color: var(--accent-ink); border-color: var(--ok); }
 .status.failed, .status.cancelled { color: var(--warn); border-color: var(--warn); }
+.status.pruned { color: var(--dim); border-style: dashed; }
+
+.panel-head { display: flex; align-items: baseline; gap: 1rem; }
+.panel-head h2 { margin-bottom: 1rem; }
+.reclaim {
+  margin-left: auto; font: inherit; font-size: 0.85rem; cursor: pointer;
+  color: var(--accent); background: none; border: 1px solid var(--line);
+  border-radius: 999px; padding: 0.2rem 0.7rem;
+}
+.reclaim:hover { border-color: var(--accent); }
+.reclaim[disabled] { opacity: 0.55; cursor: progress; }
 
 .track { height: 7px; background: var(--bar); border-radius: 999px;
          margin: 0.7rem 0 0.5rem; overflow: hidden; }

@@ -98,11 +98,27 @@ struct Pairing {
 }
 
 enum LoaderError: LocalizedError {
+
+    /// Build the right case from a refusal, unwrapping the server's own
+    /// `{"error": "..."}` so the app shows a sentence rather than a status.
+    /// 410 is kept distinct because a pruned pack is not a failure to reach
+    /// the server — it is a pack that existed and was deliberately removed.
+    static func from(status: Int, url: String, body: Data?) -> LoaderError {
+        var detail: String?
+        if let body,
+           let o = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+           let e = o["error"] as? String, !e.isEmpty {
+            detail = e
+        }
+        return status == 410 ? .packPruned(detail) : .http(status, url, detail)
+    }
+
     case badManifest
     case badPairing
     case notAuthorised
     case notAuthorisedFull
-    case http(Int, String)
+    case http(Int, String, String?)
+    case packPruned(String?)
     case shortRead(String, Int64, Int64)
     case noSpace(Int64, Int64)
 
@@ -116,7 +132,13 @@ enum LoaderError: LocalizedError {
             return "Removing assets needs Full Access to the photo library. "
                  + "Adding them only needs add-only permission, so iOS asks "
                  + "again here — allow it, or delete the TDG album by hand."
-        case .http(let code, let url): return "HTTP \(code) from \(url)"
+        case .http(let code, let url, let detail):
+            // The control plane explains every refusal in JSON. When it has,
+            // that sentence is the message — "HTTP 409 from …" is not.
+            return detail ?? "HTTP \(code) from \(url)"
+        case .packPruned(let detail):
+            return detail ?? "That pack was pruned to reclaim disk. "
+                           + "Rebuild the job, then pair again."
         case .shortRead(let name, let want, let got):
             return "\(name): expected \(want) bytes, got \(got)"
         case .noSpace(let need, let free):

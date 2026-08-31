@@ -89,6 +89,18 @@ class LoaderService : Service() {
         worker = scope.launch {
             try {
                 if (wipe) doWipe(jobId) else doLoad(jobId, manifestUrl!!)
+            } catch (e: Downloader.HttpError) {
+                // A pack pruned mid-fill is the one failure where the useful
+                // thing to say is what survived: the receipt is written as each
+                // asset lands and lives outside the pack, so everything already
+                // imported is still there and still removable.
+                val why = if (e.isGone) {
+                    "The pack was pruned on the server while loading. " +
+                        "What already landed is kept, and Wipe still removes it."
+                } else {
+                    e.serverMessage ?: "HTTP ${e.code}"
+                }
+                report("failed", 0, 0, 0, 0, why)
             } catch (e: Exception) {
                 report("failed", 0, 0, 0, 0, e.message ?: e.toString())
             } finally {

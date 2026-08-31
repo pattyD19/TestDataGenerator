@@ -55,7 +55,11 @@ Two halves. The browser half:
 | `GET /api/jobs/<id>` | one job |
 | `GET /api/jobs/<id>/events` | SSE: progress, log lines, completion |
 | `POST /api/jobs/<id>/cancel` | stop, keeping what was built |
-| `POST /api/jobs/<id>/resume` | continue a cancelled or failed job |
+| `POST /api/jobs/<id>/resume` | continue a cancelled or failed job — or rebuild a pruned one |
+| `GET /api/prune` | what could be reclaimed and how much it would free |
+| `POST /api/prune` | prune every eligible job (`{"drop_rows":…, "force":…}`) |
+| `POST /api/jobs/<id>/prune` | delete this pack, keep the job (`?force=1` for a partial build) |
+| `DELETE /api/jobs/<id>` | delete the pack *and* the job row |
 
 And the pack half, which is what a loader consumes:
 
@@ -67,6 +71,46 @@ And the pack half, which is what a loader consumes:
 The manifest is rewritten on the way out so each item carries its own URL: a
 loader needs the manifest and nothing else, and never has to know how this
 server lays out paths.
+
+## Reclaiming disk
+
+Packs are the only thing here that grows without bound: a 64 GB job leaves
+64 GB behind, and the row describing it is a few hundred bytes. So the two are
+removed separately.
+
+**Prune** deletes the media and keeps the row. The job stays in the list with
+what was asked for and what it produced, but its status becomes `pruned` — it
+stops pairing and its manifest answers `410 Gone`, rather than letting a phone
+discover the absence halfway through a transfer. **Delete** removes both.
+
+Neither touches receipts. The pack is the *source*; the receipt written at load
+time lives on the device (or under `~/.tdg/receipts`), never inside the pack, so
+**a device stays fully wipeable long after the pack it came from is gone.** That
+is the property that makes reclaiming space safe at all.
+
+A pruned job can be rebuilt: the job id and seed are on the row and the
+generator is deterministic, so `resume` reproduces the same pack byte for byte.
+Pruning costs build time, never information.
+
+In the UI, each job carries a **prune** link and the Jobs panel offers
+**Reclaim *N*** when there is anything to get back. The same thing without a
+browser:
+
+```bash
+python3 -m tdgweb.prune --packs ./packs --dry-run   # what would go
+python3 -m tdgweb.prune --packs ./packs             # prune every eligible job
+python3 -m tdgweb.prune --packs ./packs --job <id> --drop-rows
+```
+
+Two guards, because this deletes recursively:
+
+- a **partial build is never pruned by accident.** A pack still holding a
+  checkpoint is skipped by the bulk prune and refused with `409` individually;
+  discarding a resume takes `--force` / `?force=1`.
+- a **`pack_dir` outside the packs root is refused** with `400`. That path comes
+  out of the database, so it is checked against real paths — a row written when
+  the server ran with a different `--packs`, or edited by hand, cannot make
+  `rmtree` run somewhere else on the disk.
 
 `Range` matters more than it looks. A phone pulling a 4 GB clip over flaky Wi-Fi
 resumes rather than restarts, and the files are streamed in 64 KB chunks so a
@@ -96,6 +140,11 @@ manifest a loader actually fetches, `Range` semantics including suffix ranges an
 416s, token refusal, path traversal, the eight ways a bad request should be
 rejected *before* a two-hour build starts, and a genuine cancel-at-45%-then-resume.
 
+The prune tests are the same shape: a pack is really deleted from a real disk,
+and the checks are that the bytes went, the job survived, its manifest turned
+into a `410`, its pairing code stopped resolving, a rebuild reproduced the
+identical checksums, and neither guard could be walked past by accident.
+
 ## Known limits
 
 - **One job at a time is not enforced.** Two large builds will happily compete
@@ -103,7 +152,8 @@ rejected *before* a two-hour build starts, and a genuine cancel-at-45%-then-resu
   shared.
 - **No authentication beyond the per-job code.** Anyone on the LAN can create a
   job and see the list.
-- **Jobs are never garbage-collected.** Packs accumulate in `--packs` until
-  someone deletes them, and a 64 GB pack does not go unnoticed for long.
+- **Reclaiming disk is manual.** Prune is a button and a command, not a policy:
+  nothing expires a pack on age or a disk-space watermark, so packs still
+  accumulate in `--packs` until someone asks for the space back.
 - **`--packs` is trusted.** The server serves only files inside a job's own pack
   directory, but it does not sandbox what the generator writes there.

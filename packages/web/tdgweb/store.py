@@ -32,7 +32,10 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 """
 
-STATUSES = ("queued", "running", "done", "failed", "cancelled")
+# `pruned` is terminal like `done`, but means the row outlived its pack: the
+# media was deleted to reclaim disk. Keeping it distinct from `done` is what
+# stops a phone pairing with a job that has nothing left to serve.
+STATUSES = ("queued", "running", "done", "failed", "cancelled", "pruned")
 
 
 def new_token():
@@ -94,6 +97,20 @@ class Store:
                 "ORDER BY created_at DESC LIMIT 1", (token,))
             return self._row(cur.fetchone())
 
+    def by_token_any(self, token):
+        """Find a job by its code whatever state it is in.
+
+        by_token() deliberately matches only finished packs, which is right for
+        pairing but leaves the caller unable to tell "no such code" from "that
+        pack was pruned". This answers the second question so the API can say
+        which it is.
+        """
+        with self._lock:
+            cur = self._db.execute(
+                "SELECT * FROM jobs WHERE token = ? "
+                "ORDER BY created_at DESC LIMIT 1", (token,))
+            return self._row(cur.fetchone())
+
     def list(self, limit=100):
         with self._lock:
             cur = self._db.execute(
@@ -109,6 +126,14 @@ class Store:
             self._db.execute(f"UPDATE jobs SET {sets} WHERE id = :id", fields)
             self._db.commit()
         return self.get(jid)
+
+    def delete(self, jid):
+        """Forget a job entirely. The caller removes its pack first — see
+        tdgweb.prune, which owns that order."""
+        with self._lock:
+            cur = self._db.execute("DELETE FROM jobs WHERE id = ?", (jid,))
+            self._db.commit()
+        return cur.rowcount > 0
 
     def reap_running(self):
         """Mark jobs that were mid-build when the server died.

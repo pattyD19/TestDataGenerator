@@ -17,7 +17,7 @@ struct Downloader {
 
     static func data(from url: URL) async throws -> Data {
         let (data, response) = try await session.data(from: url)
-        try check(response, url)
+        try check(response, url, data)
         return data
     }
 
@@ -26,7 +26,10 @@ struct Downloader {
     /// happy path.
     static func download(_ item: PackItem, into dir: URL) async throws -> URL {
         let (tmp, response) = try await session.download(from: item.url)
-        try check(response, item.url)
+        // A failed download writes the error body to the temp file, so read it
+        // back rather than reporting a bare status for a pack that was pruned
+        // out from under a running fill.
+        try check(response, item.url, try? Data(contentsOf: tmp))
         let dest = dir.appendingPathComponent(item.name)
         try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: tmp, to: dest)
@@ -40,10 +43,12 @@ struct Downloader {
         return dest
     }
 
-    private static func check(_ response: URLResponse, _ url: URL) throws {
+    private static func check(_ response: URLResponse, _ url: URL,
+                              _ body: Data?) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard (200...299).contains(http.statusCode) else {
-            throw LoaderError.http(http.statusCode, url.absoluteString)
+            throw LoaderError.from(status: http.statusCode,
+                                   url: url.absoluteString, body: body)
         }
     }
 }

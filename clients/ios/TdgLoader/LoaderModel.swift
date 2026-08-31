@@ -81,9 +81,20 @@ final class LoaderModel: ObservableObject {
             } else {
                 canLoad = true
             }
+        } catch let error as LoaderError {
+            pairing = nil
+            // "Could not find that pack" would contradict a 410, which says
+            // the pack was found and is deliberately gone. Let the specific
+            // refusal be the headline.
+            if case .packPruned = error {
+                status = "That pack was pruned"
+            } else {
+                status = "Could not find that pack"
+            }
+            detail = error.localizedDescription
         } catch {
             pairing = nil
-            status = "Could not find that pack"
+            status = "Could not reach the control plane"
             detail = error.localizedDescription
         }
         busy = false
@@ -98,6 +109,13 @@ final class LoaderModel: ObservableObject {
         busy = true; canLoad = false; progress = 0
         do { try await runLoad(p) }
         catch is CancellationError { status = "Stopped — reopen to resume" }
+        catch LoaderError.packPruned {
+            // The receipt is written as each asset lands and lives outside the
+            // pack, so a prune mid-fill costs the remaining files and nothing
+            // that already arrived.
+            status = "The pack was pruned while loading"
+            detail = "What already landed is kept, and Wipe still removes it."
+        }
         catch {
             status = "Failed"
             detail = error.localizedDescription

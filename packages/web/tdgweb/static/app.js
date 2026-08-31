@@ -128,10 +128,12 @@ function jobCard(job) {
       <span class="pair" title="pairing code">${job.token}</span>
       <a class="manifest" href="${job.manifest_url}">manifest</a>
       <button class="act"></button>
+      <button class="prune"></button>
     </div>
     <div class="log" hidden></div>`;
   el.querySelector(".job-title").textContent = title;
   el.querySelector(".act").addEventListener("click", () => actOn(job.id, el));
+  el.querySelector(".prune").addEventListener("click", () => pruneOn(job.id, el));
   return el;
 }
 
@@ -147,8 +149,30 @@ function paint(el, job) {
   if (job.status === "running") { act.textContent = "cancel"; act.hidden = false; }
   else if (job.status === "cancelled" || job.status === "failed") {
     act.textContent = "resume"; act.hidden = false;
+  } else if (job.status === "pruned") {
+    // The job id and seed are still on the row and the generator is
+    // deterministic, so this reproduces the same pack byte for byte.
+    act.textContent = "rebuild"; act.hidden = false;
+    act.title = "Build this pack again — same job id and seed, same bytes";
   } else { act.hidden = true; }
+
+  const pr = el.querySelector(".prune");
+  if (job.status === "running") {
+    pr.hidden = true;
+  } else if (job.status === "pruned") {
+    pr.hidden = false;
+    pr.textContent = "delete";
+    pr.title = "Remove this job from the list";
+  } else {
+    pr.hidden = false;
+    pr.textContent = "prune";
+    pr.title = "Delete this pack from disk and keep the job";
+  }
+
+  // A pruned pack has nothing to hand a device, so it offers neither.
+  const gone = job.status === "pruned";
   el.querySelector(".manifest").hidden = job.status !== "done";
+  el.querySelector(".pair").hidden = gone;
   el.dataset.status = job.status;
 }
 
@@ -160,6 +184,87 @@ async function actOn(id, el) {
     await refresh();
   } catch (err) {
     el.querySelector(".msg").textContent = err.message;
+  }
+}
+
+async function pruneOn(id, el) {
+  const status = el.dataset.status;
+  // A failed or cancelled job may still hold a checkpoint, so pruning it
+  // throws away a resume. Say so before doing it rather than after.
+  const partial = status === "failed" || status === "cancelled";
+  let msg, path, opts;
+  if (status === "pruned") {
+    msg = "Remove this job from the list?\n\nIts pack is already gone.";
+    path = `/api/jobs/${id}`;
+    opts = { method: "DELETE" };
+  } else {
+    msg = "Delete this pack's files from disk?\n\n" +
+      "The job stays in the list, and any device already loaded from it can " +
+      "still be wiped — a wipe reads the receipt, not the pack." +
+      (partial ? "\n\nThis build is unfinished: pruning discards its " +
+                 "checkpoint, so resuming would restart from zero." : "");
+    path = `/api/jobs/${id}/prune` + (partial ? "?force=1" : "");
+    opts = { method: "POST" };
+  }
+  if (!confirm(msg)) return;
+  try {
+    await api(path, opts);
+    await refresh();
+    await refreshReclaim(true);
+  } catch (err) {
+    el.querySelector(".msg").textContent = err.message;
+  }
+}
+
+// ---- reclaiming disk -----------------------------------------------------
+
+// Surveying stats every file in every pack, and refresh() runs every five
+// seconds — so this is throttled, and forced only after something has actually
+// changed on disk.
+let lastSurvey = 0;
+let lastSignature = "";
+
+async function refreshReclaim(force) {
+  const now = Date.now();
+  if (!force && now - lastSurvey < 30000) return;
+  lastSurvey = now;
+  const btn = $("reclaim");
+  let survey;
+  try { survey = await api("/api/prune"); } catch { btn.hidden = true; return; }
+  if (!survey.eligible) { btn.hidden = true; return; }
+  btn.hidden = false;
+  btn.textContent = `Reclaim ${survey.reclaimable_human}`;
+  btn.title = `${survey.eligible} pack(s) can be deleted from disk`;
+  btn.dataset.count = survey.eligible;
+  btn.dataset.size = survey.reclaimable_human;
+}
+
+async function reclaim() {
+  const btn = $("reclaim");
+  // Ask the server again rather than trusting the label: a build may have
+  // finished since it was drawn, and the number in a delete confirmation has
+  // to be the number that will actually be deleted.
+  let survey;
+  try { survey = await api("/api/prune"); } catch (err) { return; }
+  if (!survey.eligible) { await refreshReclaim(true); return; }
+  const n = survey.eligible, size = survey.reclaimable_human;
+  if (!confirm(
+    `Delete ${n} pack(s) from disk, freeing ${size}?\n\n` +
+    "The jobs stay in the list and can be rebuilt. Unfinished builds are " +
+    "skipped so their resume survives. Devices already loaded stay wipeable.")) {
+    return;
+  }
+  btn.disabled = true;
+  try {
+    await api("/api/prune", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    await refresh();
+    await refreshReclaim(true);
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -212,9 +317,18 @@ async function refresh() {
     if (job.status === "running") watch(job, el); else close(job.id);
   });
   [...host.children].forEach((c) => { if (c.id && !seen.has(c.id)) c.remove(); });
+  // Only a status change alters what can be reclaimed — done_bytes moves
+  // constantly during a build and must not trigger a survey. The throttle
+  // stays as a floor, so a prune run from the CLI still shows up eventually.
+  const signature = jobs.map((j) => j.id + ":" + j.status).join(",");
+  const changed = signature !== lastSignature;
+  lastSignature = signature;
+  refreshReclaim(changed);
 }
 
 $("form").addEventListener("submit", submit);
+$("reclaim").addEventListener("click", reclaim);
 $("photo_fraction").addEventListener("input", syncFraction);
-loadOptions().then(refresh).catch((e) => { $("formError").textContent = e.message; });
+loadOptions().then(refresh).then(() => refreshReclaim(true))
+  .catch((e) => { $("formError").textContent = e.message; });
 setInterval(refresh, 5000);

@@ -146,9 +146,17 @@ class MainActivity : AppCompatActivity() {
                     if (free in 0 until need) append("  — NOT ENOUGH SPACE")
                 }
                 loadBtn.isEnabled = free < 0 || free >= need
+            } catch (e: Downloader.HttpError) {
+                // The server already explains a pruned, unfinished or unknown
+                // pack in words meant to be read. Prefixing it with "could not
+                // find that pack" would contradict the 410, which says the
+                // pack was found and is deliberately gone.
+                manifestUrl = null
+                summary.text = e.serverMessage
+                    ?: "Could not find that pack: HTTP ${e.code}"
             } catch (e: Exception) {
                 manifestUrl = null
-                summary.text = "Could not find that pack: ${e.message}"
+                summary.text = "Could not reach the control plane: ${e.message}"
             }
         }
     }

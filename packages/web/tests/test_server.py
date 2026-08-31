@@ -27,6 +27,7 @@ REPO = os.path.dirname(os.path.dirname(WEB))
 sys.path.insert(0, WEB)
 
 from tdgweb.server import serve                # noqa: E402
+from tdgweb import prune as prune_mod           # noqa: E402
 
 FAILURES = []
 BASE = None
@@ -212,6 +213,125 @@ def main():
     code, jobs, _ = req("/api/jobs")
     check(code == 200 and len(jobs) >= 2, "jobs are listed newest first")
     check(jobs[0]["created_at"] >= jobs[-1]["created_at"], "ordering is newest first")
+
+    print("prune: the survey")
+    code, survey, _ = req("/api/prune")
+    check(code == 200 and survey["eligible"] >= 2,
+          "the survey lists the packs that can be reclaimed")
+    check(survey["reclaimable_bytes"] > 0 and survey["reclaimable_human"],
+          f"and reports what they would free ({survey.get('reclaimable_human')})")
+    row = next(r for r in survey["jobs"] if r["id"] == jid)
+    check(row["present"] and row["bytes"] >= done["done_bytes"],
+          "a pack measures at least its manifest total, since LICENSES.csv counts too")
+
+    print("prune: the guards")
+    outside = os.path.join(tmp, "not-a-pack")
+    os.makedirs(outside, exist_ok=True)
+    rogue = httpd.store.create("rogue1", {"size": "1MB"}, 1, outside)
+    httpd.store.update(rogue["id"], status="done")
+    try:
+        prune_mod.prune_job(httpd.store, httpd.packs_dir, rogue["id"])
+        refused = False
+    except prune_mod.PruneError as exc:
+        refused = exc.code == 400
+    check(refused and os.path.isdir(outside),
+          "a pack_dir outside the packs root is refused, and that directory survives")
+    httpd.store.delete(rogue["id"])
+
+    partial_dir = os.path.join(httpd.packs_dir, "partial1")
+    os.makedirs(partial_dir, exist_ok=True)
+    for name in prune_mod.CHECKPOINT:
+        with open(os.path.join(partial_dir, name), "w") as fh:
+            fh.write("{}\n")
+    part = httpd.store.create("partial1", {"size": "1MB"}, 1, partial_dir)
+    httpd.store.update(part["id"], status="cancelled")
+    code, resp, _ = req(f"/api/jobs/{part['id']}/prune", "POST")
+    check(code == 409 and "partial" in resp["error"],
+          "an unfinished build is not pruned by accident")
+    check(os.path.isdir(partial_dir), "and its checkpoint is left where resume needs it")
+    code, survey2, _ = req("/api/prune")
+    prow = next(r for r in survey2["jobs"] if r["id"] == part["id"])
+    check(prow["resumable"] and not prow["eligible"],
+          "the survey marks it resumable rather than reclaimable")
+    code, _, _ = req(f"/api/jobs/{part['id']}/prune?force=1", "POST")
+    check(code == 200 and not os.path.isdir(partial_dir),
+          "force discards it, which has to be asked for explicitly")
+
+    print("prune: one pack")
+    pack_dir = row["pack_dir"]
+    code, out, _ = req(f"/api/jobs/{jid}/prune", "POST")
+    check(code == 200 and out["freed_bytes"] > 0,
+          f"pruning a finished pack frees its bytes ({out.get('freed_human')})")
+    check(not os.path.isdir(pack_dir), "the pack directory is gone from disk")
+    _, pruned, _ = req(f"/api/jobs/{jid}")
+    check(pruned["status"] == "pruned", "and the job stays in the list, marked pruned")
+
+    code, resp, _ = req(f"/api/jobs/{jid}/manifest?token={token}")
+    check(code == 410 and "prune" in resp.get("error", ""),
+          "its manifest answers 410 Gone and says why, not 'not built yet'")
+    code, resp, _ = req(first["url"])
+    # This is the route a device is actually on when a pack is pruned mid-fill,
+    # and it must not claim the file was never in the pack. Regression: the
+    # allowlist is built from the manifest, which the prune deletes, so this
+    # answered 404 "not in this pack" until the status was checked first.
+    check(code == 410 and "pruned" in resp.get("error", ""),
+          "its files answer 410 with the reason too, not 'not in this pack'")
+    code, resp, _ = req(f"/api/pair/{token}")
+    check(code == 410 and "pruned" in resp.get("error", ""),
+          "and its code answers 410 with the reason, so a loader can say which "
+          "of 'wrong code' and 'pack is gone' it is")
+    code, resp, _ = req("/api/pair/000001")
+    check(code == 404 and "no pack" in resp.get("error", ""),
+          "while an unknown code stays a plain 404")
+    building = httpd.store.create("building1", {"size": "1MB"}, 1,
+                                  os.path.join(httpd.packs_dir, "building1"))
+    httpd.store.update(building["id"], status="running")
+    code, resp, _ = req(f"/api/pair/{building['token']}")
+    check(code == 409 and "still building" in resp.get("error", ""),
+          "and a code for a build still running says so rather than 'not found'")
+    httpd.store.delete(building["id"])
+
+    print("prune: rebuild, because a pack is reproducible")
+    code, _, _ = req(f"/api/jobs/{jid}/resume", "POST")
+    check(code == 200, "a pruned job can be built again")
+    rebuilt = wait_for(jid, ("done", "failed"))
+    check(rebuilt["status"] == "done" and
+          rebuilt["done_bytes"] == rebuilt["target_bytes"],
+          "and the rebuild lands on the same exact target")
+    code, man2, _ = req(f"/api/jobs/{jid}/manifest?token={token}")
+    check(code == 200 and [i["sha256"] for i in man2["items"]] ==
+          [i["sha256"] for i in man["items"]],
+          "with byte-identical contents — pruning costs build time, not information")
+
+    print("prune: in bulk, and deleting the row")
+    partial2 = os.path.join(httpd.packs_dir, "partial2")
+    os.makedirs(partial2, exist_ok=True)
+    for name in prune_mod.CHECKPOINT:
+        with open(os.path.join(partial2, name), "w") as fh:
+            fh.write("{}\n")
+    p2 = httpd.store.create("partial2", {"size": "1MB"}, 1, partial2)
+    httpd.store.update(p2["id"], status="cancelled")
+
+    code, bulk, _ = req("/api/prune", "POST", {})
+    check(code == 200 and bulk["freed_bytes"] > 0,
+          f"a bulk prune reclaims the rest ({bulk.get('freed_human')})")
+    check(os.path.isdir(partial2) and
+          any(sk["id"] == p2["id"] for sk in bulk["skipped"]),
+          "while passing over an unfinished build, and saying which it skipped")
+    check(all(not os.path.isdir(os.path.join(httpd.packs_dir, r["job_id"]))
+              for r in bulk["pruned"]), "every pack it reported is really gone")
+    _, survey3, _ = req("/api/prune")
+    check(survey3["eligible"] == 0 and survey3["reclaimable_bytes"] == 0,
+          "leaving nothing to reclaim")
+    _, still, _ = req("/api/jobs")
+    check(len(still) >= 2, "the job history survives the packs")
+
+    code, out, _ = req(f"/api/jobs/{jid}", "DELETE")
+    check(code == 200 and out["row"] == "deleted", "delete removes the row as well")
+    code, _, _ = req(f"/api/jobs/{jid}")
+    check(code == 404, "after which the job is gone from the API")
+    code, _, _ = req("/api/jobs/deadbeefdead/prune", "POST")
+    check(code == 404, "pruning an unknown job is 404, not a crash")
 
     httpd.shutdown()
     shutil.rmtree(tmp, ignore_errors=True)
