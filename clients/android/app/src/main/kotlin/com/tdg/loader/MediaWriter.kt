@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.provider.MediaStore
+import java.io.File
 
 /**
  * Writing into the camera roll.
@@ -84,6 +85,52 @@ class MediaWriter(private val context: Context) {
                 if (resolver.delete(Uri.parse(s), null, null) > 0) gone++
             } catch (e: Exception) {
                 // Someone deleted it in the gallery first. Not an error.
+            }
+        }
+        return gone
+    }
+
+    /**
+     * The distinct folders these assets live in, read from MediaStore.
+     *
+     * Asked *before* the delete, because afterwards the rows are gone and with
+     * them the only record of where the files were. Reading it back beats
+     * recording it in the receipt: it stays correct when a manifest names a
+     * custom album, and needs no receipt-format change.
+     */
+    fun foldersOf(uris: List<String>): Set<String> {
+        val out = LinkedHashSet<String>()
+        val cols = arrayOf(MediaStore.MediaColumns.RELATIVE_PATH)
+        for (s in uris) {
+            try {
+                resolver.query(Uri.parse(s), cols, null, null, null)?.use { c ->
+                    if (c.moveToFirst()) c.getString(0)?.let { out.add(it) }
+                }
+            } catch (e: Exception) {
+                // Already gone, or never ours. Nothing to clean up either way.
+            }
+        }
+        return out
+    }
+
+    /**
+     * Remove pack folders that the wipe has just emptied.
+     *
+     * MediaStore.delete removes rows, not the directories that held them, so a
+     * wiped device kept an empty "DCIM/TDG <job>" per run. Scoped storage does
+     * permit an app to remove a directory it created, provided it is empty —
+     * and empty is the only case this touches. A folder still holding anything
+     * is left alone, because whatever is in it is not something we wrote.
+     */
+    fun removeEmptyFolders(relativePaths: Set<String>): Int {
+        var gone = 0
+        val root = Environment.getExternalStorageDirectory() ?: return 0
+        for (rel in relativePaths) {
+            val dir = File(root, rel)
+            try {
+                if (dir.isDirectory && dir.list()?.isEmpty() == true && dir.delete()) gone++
+            } catch (e: Exception) {
+                // A cosmetic tidy-up must never fail a wipe that worked.
             }
         }
         return gone

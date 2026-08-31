@@ -196,8 +196,13 @@ class LoaderService : Service() {
         val receipt = Receipt(this, jobId)
         val total = receipt.count
         report("running", 0, 0, 0, total, "Removing $total assets")
-        val gone = MediaWriter(this).delete(receipt.uris())
+        val writer = MediaWriter(this)
+        val uris = receipt.uris()
+        // Where they live has to be read before the rows are deleted.
+        val folders = writer.foldersOf(uris)
+        val gone = writer.delete(uris)
         receipt.clear()
+        writer.removeEmptyFolders(folders)
         report("done", 0, 0, 0, total, "Removed $gone of $total")
     }
 
