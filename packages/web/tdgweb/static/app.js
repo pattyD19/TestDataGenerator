@@ -187,6 +187,48 @@ async function actOn(id, el) {
   }
 }
 
+// How many jobs stay as full cards. Beyond this the history is still there,
+// just not occupying a screenful — a long-running lab accumulates dozens.
+const RECENT = 4;
+
+function compactRow(job) {
+  const el = document.createElement("div");
+  el.className = "orow";
+  el.id = "job-" + job.id;
+  el.innerHTML = `
+    <span class="otitle"></span>
+    <span class="status ${job.status}">${job.status}</span>
+    <span class="ometa"></span>
+    <button class="act"></button>
+    <button class="prune"></button>
+    <span class="msg"></span>`;
+  el.querySelector(".act").addEventListener("click", () => actOn(job.id, el));
+  el.querySelector(".prune").addEventListener("click", () => pruneOn(job.id, el));
+  return el;
+}
+
+function paintRow(el, job) {
+  el.querySelector(".otitle").textContent =
+    job.params.label || `${job.params.size} · ${job.params.profile}`;
+  const st = el.querySelector(".status");
+  st.className = "status " + job.status;
+  st.textContent = job.status;
+  el.querySelector(".ometa").textContent =
+    (job.file_count ? `${job.file_count} files · ` : "") +
+    human(job.done_bytes) + " · " + ago(job.created_at);
+
+  // The same two actions the cards offer, so an old job can still be
+  // reclaimed or rebuilt without expanding it into one.
+  const act = el.querySelector(".act"), pr = el.querySelector(".prune");
+  if (job.status === "pruned") { act.textContent = "rebuild"; act.hidden = false; }
+  else if (job.status === "cancelled" || job.status === "failed") {
+    act.textContent = "resume"; act.hidden = false;
+  } else { act.hidden = true; }
+  pr.textContent = job.status === "pruned" ? "delete" : "prune";
+  pr.hidden = false;
+  el.dataset.status = job.status;
+}
+
 async function pruneOn(id, el) {
   const status = el.dataset.status;
   // A failed or cancelled job may still hold a checkpoint, so pruning it
@@ -308,15 +350,46 @@ async function refresh() {
     return;
   }
   if (host.querySelector("p")) host.innerHTML = "";
+
+  // Jobs arrive newest first. A running build stays a full card however old it
+  // is — the one job you actively need to watch must never be the one folded
+  // away.
+  const recent = [], older = [];
+  jobs.forEach((job, i) => {
+    (i < RECENT || job.status === "running" ? recent : older).push(job);
+  });
+
   const seen = new Set();
-  jobs.forEach((job) => {
+  const oldHost = $("older");
+  recent.forEach((job) => {
     seen.add("job-" + job.id);
     let el = $("job-" + job.id);
-    if (!el) { el = jobCard(job); host.prepend(el); }
+    // A job crossing the boundary changes shape, so rebuild it rather than
+    // repainting a compact row with card markup it does not have.
+    if (el && !el.classList.contains("job")) { el.remove(); el = null; }
+    if (!el) { el = jobCard(job); }
+    host.appendChild(el);                 // appendChild also reorders in place
     paint(el, job);
     if (job.status === "running") watch(job, el); else close(job.id);
   });
-  [...host.children].forEach((c) => { if (c.id && !seen.has(c.id)) c.remove(); });
+  older.forEach((job) => {
+    seen.add("job-" + job.id);
+    let el = $("job-" + job.id);
+    if (el && !el.classList.contains("orow")) { el.remove(); el = null; }
+    if (!el) { el = compactRow(job); }
+    oldHost.appendChild(el);
+    paintRow(el, job);
+    close(job.id);
+  });
+  [...host.children, ...oldHost.children]
+    .forEach((c) => { if (c.id && !seen.has(c.id)) c.remove(); });
+
+  const wrap = $("olderWrap");
+  wrap.hidden = older.length === 0;
+  if (older.length) {
+    $("olderSummary").textContent =
+      `${older.length} older job${older.length === 1 ? "" : "s"}`;
+  }
   // Only a status change alters what can be reclaimed — done_bytes moves
   // constantly during a build and must not trigger a survey. The throttle
   // stays as a floor, so a prune run from the CLI still shows up eventually.
@@ -325,6 +398,18 @@ async function refresh() {
   lastSignature = signature;
   refreshReclaim(changed);
 }
+
+// Remember whether the history was left open. Wrapped because a browser set
+// to block site data throws on access rather than returning null, and a
+// preference this small must never break the page.
+const OLDER_KEY = "tdg.olderOpen";
+try {
+  $("olderWrap").open = localStorage.getItem(OLDER_KEY) === "1";
+} catch (e) { /* no storage; default closed */ }
+$("olderWrap").addEventListener("toggle", () => {
+  try { localStorage.setItem(OLDER_KEY, $("olderWrap").open ? "1" : "0"); }
+  catch (e) { /* nothing to do */ }
+});
 
 $("form").addEventListener("submit", submit);
 $("reclaim").addEventListener("click", reclaim);

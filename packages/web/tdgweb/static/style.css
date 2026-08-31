@@ -127,6 +127,37 @@ button[type="submit"][disabled] { opacity: 0.55; cursor: progress; }
 }
 .pair { font-variant-numeric: tabular-nums; letter-spacing: 0.14em;
         font-weight: 600; color: var(--ink); }
+/* Older jobs: one line each, so a long history costs a few pixels rather
+   than a screenful of cards. */
+.older { margin-top: 0.9rem; }
+.older > summary {
+  cursor: pointer; color: var(--dim); font-size: 0.85rem;
+  padding: 0.45rem 0; list-style: none; user-select: none;
+}
+.older > summary::-webkit-details-marker { display: none; }
+.older > summary::before {
+  content: "\25B8"; display: inline-block; width: 1em;
+  transition: transform 0.15s ease; color: var(--dim);
+}
+.older[open] > summary::before { transform: rotate(90deg); }
+.older > summary:hover { color: var(--ink); }
+
+.older-list { border-top: 1px solid var(--line); }
+.orow {
+  display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap;
+  padding: 0.5rem 0.1rem; border-bottom: 1px solid var(--line);
+  font-size: 0.85rem; color: var(--dim);
+}
+.orow .otitle { color: var(--ink); font-weight: 600; flex: 1 1 12rem;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orow .status { font-size: 0.66rem; padding: 0.1rem 0.45rem; }
+.orow .ometa { font-variant-numeric: tabular-nums; }
+.orow .msg:not(:empty) { color: var(--warn); flex-basis: 100%; }
+.orow button {
+  font: inherit; font-size: 0.85rem; cursor: pointer; color: var(--accent);
+  background: none; border: 0; padding: 0; text-decoration: underline;
+}
+
 .log {
   margin-top: 0.6rem; max-height: 9rem; overflow: auto; font-size: 0.78rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
