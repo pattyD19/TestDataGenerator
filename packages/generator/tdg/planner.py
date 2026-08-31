@@ -453,14 +453,29 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
             if n >= 2:
                 n = min(n, jobs * 4)
                 batch = [next_task() for _ in range(n)]
-                fresh = []
-                for (name, when, gps, _, fmt), (_, size) in zip(
-                        batch, pool.map(_photo_task, [b[3] for b in batch])):
+                sized = list(pool.map(_photo_task, [b[3] for b in batch]))
+                # The ceiling is enforced per file here, not just in the tail
+                # below. A batch is priced off the largest photo seen so far,
+                # but a fresh one can encode larger still — and nothing
+                # downstream can bring a pack back down, since trim and pad
+                # only ever add. One batch overshooting was enough to land a
+                # 24 MB pack 1.02 MB over, with no way to recover.
+                fresh, kept = [], 0
+                for (name, when, gps, _, fmt), (_, size) in zip(batch, sized):
+                    if total + size > photo_ceiling:
+                        break
                     fresh.append(record(name, "image", size, when, gps, fmt=fmt))
-                made += n
+                    kept += 1
+                for _, _, _, task, _ in batch[kept:]:
+                    if os.path.exists(task[1]):
+                        os.remove(task[1])      # encoded, then priced out
+                idx -= n - kept                 # keep the numbering contiguous
+                made += kept
                 save(fresh)
                 progress(f"  photos {made}  total {sizing.human(total)} / "
                          f"{sizing.human(target_bytes)}")
+                if kept < n:
+                    phase = "trim"              # the ceiling is reached
                 continue
 
             # Tail: one at a time, discarding any file that would overshoot.

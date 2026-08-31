@@ -46,6 +46,29 @@ def build(out, extra=(), size="24MB", job="fmtjob"):
 def main():
     tmp = tempfile.mkdtemp(prefix="tdg-fmt-")
 
+    # ---- the photo batch must respect the ceiling -------------------------
+    # A batch is priced off the largest photo seen so far, but a fresh one can
+    # encode larger still. Only the tail checked the ceiling, so a batch could
+    # carry the pack past target — and nothing downstream can bring it back
+    # down, since trim and pad only add. This job id and seed reproduce it
+    # deterministically: it landed 1,074,311 bytes over a 24 MB target.
+    print("exact size, on the draw that used to overshoot")
+    pack = os.path.join(tmp, "ceiling")
+    cli(["build", "--size", "24MB", "--out", pack, "--job", "7d1fcb",
+         "--profile", "iphone-15-pro", "--photo-fraction", "1.0", "--seed", "1",
+         "--preset", "ultrafast", "--photo-format", "jpeg",
+         "--video-codec", "h264", "--quiet"])
+    with open(os.path.join(pack, "manifest.json")) as fh:
+        doc = json.load(fh)
+    check(doc["total_bytes"] == doc["target_bytes"],
+          f"a photo batch never overshoots the target (delta {doc['delta_bytes']:+,})")
+    on_disk = sum(os.path.getsize(os.path.join(pack, i["name"]))
+                  for i in doc["items"])
+    check(on_disk == doc["total_bytes"],
+          "and the bytes on disk match what the manifest claims")
+    check(len(doc["items"]) == len({i["name"] for i in doc["items"]}),
+          "with no name reused by a photo that was priced out and deleted")
+
     # ---- HEIC -------------------------------------------------------------
     print("HEIC")
     backend = amplify.heic_backend()
