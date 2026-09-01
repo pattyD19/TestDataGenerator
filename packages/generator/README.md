@@ -6,18 +6,21 @@ capture dates, ready for a loader to push into a device's camera roll.
 Phase 1 of [the plan](../../PLAN.md). Python, because Pillow, numpy and ffmpeg
 are already present everywhere we build; no third-party packages are required
 (the EXIF writer is hand-rolled against the TIFF spec rather than pulling
-piexif, and `harvest` is the only module that needs `requests`).
+piexif, and `harvest` uses `urllib` rather than `requests` — so the whole
+package runs on a stock interpreter).
 
 ## Quick start
 
 ```bash
 cd packages/generator
 
-# 1. a seed pool. No network needed — synthesises textured stills locally.
-python3 -m tdg.cli bootstrap-seeds --count 48
-
-#    ...or, on a machine with internet, fetch real open-license media:
+# 1. a seed pool. Prefer this — real media, and packs whose stills are
+#    visually distinct. Run it once; see "The seed pool" below.
 python3 -m tdg.cli harvest --images 200
+
+#    ...or, with no network, synthesise textured stills locally. Fine for
+#    plumbing, not for anything that looks at the results.
+python3 -m tdg.cli bootstrap-seeds --count 48
 
 # 2. build a pack
 python3 -m tdg.cli build --size 25GB --profile iphone-15-pro --out ./pack
@@ -135,6 +138,60 @@ rejected by the control plane's ASCII-only file route, which now allowlists
 against the manifest instead — stricter *and* more permissive. And the
 screenshot and zero-byte file have no EXIF, so Android leaves `DATE_TAKEN`
 null; `tdg verify` used to count them as missing rather than as undated.
+
+## The seed pool
+
+Every still in a pack is a crop of a seed image, re-encoded with its own EXIF.
+That is the whole economy of the design: stock APIs prohibit bulk downloading,
+so one polite harvest of a few hundred assets supports unlimited packs at any
+size, forever, offline.
+
+`seed-pool/` is **gitignored** — it is hundreds of megabytes of other people's
+media, with a `seeds.json` recording the licence and origin of each file. A
+fresh clone therefore has no seed pool, and you have to populate it:
+
+```bash
+python3 -m tdg.cli harvest --images 200      # real media, needs a network
+python3 -m tdg.cli bootstrap-seeds           # synthetic, needs nothing
+```
+
+**Prefer `harvest`, and it is worth knowing why.** How many seeds you have
+decides whether two stills in the same pack are the same picture. With twelve
+synthetic seeds, a 2,227-photo pack contained 268 pairs that were
+perceptually identical and 7,091 a dedupe engine would flag — because at 186
+crops per seed, overlapping windows are arithmetic rather than bad luck. With
+212 seeds, plus the variation and the gate below, the same measurement finds
+none. Byte uniqueness was never the issue: different EXIF alone guarantees
+distinct checksums and says nothing about whether two files are the same
+photograph.
+
+Three things keep stills apart, and they compound:
+
+- **the pool** — more seeds, fewer crops each
+- **variation per file** — a random crop window and scale, a horizontal flip,
+  a slight rotation, and jitter on colour, brightness and contrast. Geometry
+  alone was not enough; two overlapping crops diverge once their tone does.
+- **a uniqueness gate** — each still is perceptually hashed as it is rendered
+  and redrawn if it lands within 6 bits of one already in the pack. Bucketed
+  by seed, since crops of different seeds are unrelated pictures. If the pool
+  is too small to satisfy the gate, the build says so and stands down rather
+  than spinning — the exact size is the harder promise to keep.
+
+The duplicates a pack *is* supposed to contain — the byte-identical copy and
+the burst run — come from `--edge-cases` and never enter the gate.
+
+### Sources
+
+`harvest` pulls from Openverse and Wikimedia Commons, neither of which needs
+an API key, and covers any shortfall from one with the other. Openverse
+currently answers `401` without a key, so in practice the pool comes from
+Wikimedia's featured pictures. Pexels and Pixabay are supported if you set
+`PEXELS_API_KEY` / `PIXABAY_API_KEY`.
+
+Video seeds are **opt-in** (`--video-seeds`), and off by default on purpose:
+cutting a clip out of real footage means seeking into it, and that seek is not
+frame-reproducible — a pack built from a video seed cannot be rebuilt byte for
+byte from its `--job` and `--seed`. Synthetic video always can.
 
 ## How it hits an exact size
 
@@ -309,11 +366,17 @@ passed it.
   since the EXIF now carries offset tags.
 - **Synthetic bootstrap seeds are obviously synthetic.** They are textured
   enough to compress like photographs (a 12 MP still lands at ~3.4 MB at q88,
-  which is the point), but they are not photographs. Run `harvest` for real
-  media before any test that involves looking at the results.
-- `harvest` needs network access to the media hosts. It is deliberately paced
-  and cached: stock APIs prohibit bulk downloading, which is the entire reason
-  for the seed-pool-plus-amplifier design.
+  which is the point), but they are not photographs — and there are only as
+  many as you asked for, which caps how visually distinct a large pack can be.
+  Run `harvest` before any test that looks at the results or measures
+  duplicates. See [The seed pool](#the-seed-pool).
+- **A small pool caps pack variety.** The uniqueness gate can only reject a
+  near-copy, not invent a new subject, so past roughly a few hundred stills
+  per seed it will exhaust the pool, switch itself off and say so. More seeds
+  is the only real fix.
+- `harvest` needs network access to the media hosts. It is deliberately paced:
+  stock APIs prohibit bulk downloading, which is the entire reason for the
+  seed-pool-plus-amplifier design.
 - Throughput is CPU-bound on JPEG encoding and x264, and scales nearly
   linearly with cores — `--jobs` and a faster `--preset` are the levers.
   Measured at the default 70/30 photo/video mix:

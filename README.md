@@ -8,8 +8,9 @@ See [PLAN.md](./PLAN.md) for the full build plan.
 ## Quick start
 
 ```bash
-# a seed pool (synthetic, no network needed)
-python3 -m tdg.cli bootstrap-seeds            # from packages/generator
+# a seed pool — every still is a crop of one of these, so run this first.
+# Real media, needs a network; `bootstrap-seeds` is the offline fallback.
+python3 -m tdg.cli harvest --images 200       # from packages/generator
 
 # either drive it from the browser...
 python3 packages/web/serve.py                 # then open http://localhost:8722
@@ -27,7 +28,11 @@ python3 -m tdg.cli wipe --job <id>
 - `packages/web` — browser control plane: presets, live progress, LAN pack serving
 - `clients/android` — Kotlin loader (MediaStore), builds with Gradle
 - `clients/ios` — SwiftUI loader (PHAssetCreationRequest), builds with xcodebuild
-- `seed-pool` — cached CC0/CC-BY source media + LICENSES.csv (gitignored, rebuilt by harvester)
+- `seed-pool` — cached CC0/CC-BY source media, with the licence and origin of
+  each file in `seeds.json`. **Gitignored**, so a fresh clone has none: run
+  `tdg harvest` (or `tdg bootstrap-seeds` offline) before building a pack.
+  Pool size decides how visually distinct a pack's stills are — see
+  [the generator README](./packages/generator/README.md#the-seed-pool)
 - `docs/conformance` — what `tdg verify` found on each device
 
 ## Status
