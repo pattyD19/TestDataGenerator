@@ -18,13 +18,14 @@ obligations.
 import json
 import os
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 
-import requests
-
+# stdlib only, like the rest of the generator. This module used `requests`,
+# which meant the one tool that needs a network could not run on a machine
+# where pip is externally managed — exactly the machine you want to harvest on.
 UA = "TDG-SeedHarvester/0.1 (mobile test data generator; contact: platform@example.com)"
-SESSION = requests.Session()
-SESSION.headers["User-Agent"] = UA
 
 BLENDER_CLIPS = [
     ("https://download.blender.org/peach/bigbuckbunny_movies/BigBuckBunny_320x180.mp4",
@@ -34,25 +35,35 @@ BLENDER_CLIPS = [
 ]
 
 
-def _get(url, **kw):
+def _open(url):
+    """A response, retrying on the documented rate limit and on transient
+    network errors. The caller closes it; every use here is inside a `with`."""
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
     for attempt in range(3):
         try:
-            r = SESSION.get(url, timeout=30, **kw)
-            if r.status_code == 429:
+            return urllib.request.urlopen(req, timeout=30)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and attempt < 2:
                 time.sleep(5 * (attempt + 1))
                 continue
-            r.raise_for_status()
-            return r
-        except requests.RequestException:
+            raise
+        except urllib.error.URLError:
             if attempt == 2:
                 raise
             time.sleep(2 * (attempt + 1))
 
 
+def _get_json(url):
+    with _open(url) as r:
+        return json.loads(r.read().decode())
+
+
 def _download(url, dest):
-    r = _get(url, stream=True)
-    with open(dest, "wb") as fh:
-        for chunk in r.iter_content(1 << 20):
+    with _open(url) as r, open(dest, "wb") as fh:
+        while True:                       # a master must not be buffered whole
+            chunk = r.read(1 << 20)
+            if not chunk:
+                break
             fh.write(chunk)
     return os.path.getsize(dest)
 
@@ -64,8 +75,8 @@ def from_openverse(out_dir, count=120, query="landscape", cc0_only=True):
         params = {"q": query, "page_size": 50, "page": page, "mature": "false"}
         if cc0_only:
             params["license"] = "cc0,pdm"
-        r = _get("https://api.openverse.org/v1/images/?" + urllib.parse.urlencode(params))
-        results = r.json().get("results", [])
+        results = _get_json("https://api.openverse.org/v1/images/?"
+                            + urllib.parse.urlencode(params)).get("results", [])
         if not results:
             break
         for item in results:
@@ -98,8 +109,7 @@ def from_wikimedia(out_dir, count=80, category="Category:Featured_pictures_on_Wi
                   "prop": "imageinfo", "iiprop": "url|extmetadata", "iiurlwidth": 4000}
         if cont:
             params["gcmcontinue"] = cont
-        r = _get(api + "?" + urllib.parse.urlencode(params))
-        data = r.json()
+        data = _get_json(api + "?" + urllib.parse.urlencode(params))
         pages = (data.get("query") or {}).get("pages", {})
         for page in pages.values():
             if len(entries) >= count:
@@ -145,15 +155,29 @@ def from_blender(out_dir):
     return entries
 
 
-def harvest(out_dir, images=200, videos=True, query="landscape", cc0_only=True):
+def harvest(out_dir, images=200, videos=False, query="landscape", cc0_only=True):
+    """Fetch seed stills, and optionally clips.
+
+    `videos` defaults off. A harvested clip makes render_video seek into real
+    footage, and that seek is not frame-reproducible — which silently costs the
+    byte-for-byte rebuild that --job plus --seed otherwise guarantees. Two
+    suites catch it, but the default should not need catching.
+    """
     os.makedirs(out_dir, exist_ok=True)
     entries = []
-    half = images // 2
-    for fn, n in ((from_openverse, half), (from_wikimedia, images - half)):
+    # Openverse first, then Wikimedia for whatever is still missing. The split
+    # used to be fixed up front, so a blocked source cost half the pool in
+    # silence — when Openverse began requiring a key, asking for 200 produced
+    # 100 and said nothing. Wikimedia paginates, so it can cover the shortfall.
+    try:
+        entries += from_openverse(out_dir, images // 2, query, cc0_only)
+    except Exception as exc:                           # a blocked source is not fatal
+        print(f"  ! from_openverse failed: {exc}")
+    if len(entries) < images:
         try:
-            entries += fn(out_dir, n) if fn is from_wikimedia else fn(out_dir, n, query, cc0_only)
-        except Exception as exc:                       # a blocked source is not fatal
-            print(f"  ! {fn.__name__} failed: {exc}")
+            entries += from_wikimedia(out_dir, images - len(entries))
+        except Exception as exc:
+            print(f"  ! from_wikimedia failed: {exc}")
     if videos:
         try:
             entries += from_blender(out_dir)

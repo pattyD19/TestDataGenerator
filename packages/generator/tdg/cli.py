@@ -25,7 +25,7 @@ def cmd_bootstrap(args):
 def cmd_harvest(args):
     from . import harvest
     print(f"Harvesting up to {args.images} open-license stills into {args.out}")
-    entries = harvest.harvest(args.out, images=args.images, videos=not args.no_videos,
+    entries = harvest.harvest(args.out, images=args.images, videos=args.video_seeds,
                               query=args.query, cc0_only=not args.any_license)
     print(f"  seed pool now holds {len(entries)} assets")
 
@@ -161,7 +161,11 @@ def main(argv=None):
     h.add_argument("--out", default=DEFAULT_SEEDS)
     h.add_argument("--images", type=int, default=200)
     h.add_argument("--query", default="landscape")
-    h.add_argument("--no-videos", action="store_true")
+    h.add_argument("--video-seeds", action="store_true",
+                   help="also fetch open-license clips to cut video from. Off "
+                        "by default: seeking into a real clip is not "
+                        "frame-reproducible, so a pack built from one cannot "
+                        "be rebuilt byte for byte. Synthetic video always can")
     h.add_argument("--any-license", action="store_true",
                    help="allow attribution-required licences, not just CC0/PDM")
     h.set_defaults(fn=cmd_harvest)
