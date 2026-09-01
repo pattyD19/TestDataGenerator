@@ -66,7 +66,8 @@ included) and the web's static directory. Nobody needs to run it to build.
 
 ## Tests
 
-No third-party runner; each suite is a plain script.
+No third-party runner; each suite is a plain script. 190 checks across the five,
+and each prints `all checks passed` or exits non-zero.
 
 ```bash
 python3 packages/generator/tests/test_exif.py      # capture times and EXIF

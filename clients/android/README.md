@@ -58,6 +58,19 @@ reliable handle for an imported asset, and the URI is what `delete` needs.
 back or delete media it owns. Wipe is a plain `delete` with no system prompt,
 which is what makes it usable daily.
 
+**Wipe takes the folder too.** Deleting the rows leaves `DCIM/TDG <job>/` behind
+as an empty album in some galleries, so wipe reads each asset's `RELATIVE_PATH`
+*before* deleting it and then removes any of those directories that came out
+empty. Scoped storage permits exactly this and no more: a directory the app
+created, with nothing left in it. A folder still holding media the app does not
+own is left alone.
+
+**A pruned pack is said out loud, not discovered.** The control plane answers
+`410 Gone` for a pack whose media has been reclaimed, so `Downloader` keeps the
+status code on its `HttpError` and the app reports what actually happened —
+including mid-fill, when a pack pruned underneath a running transfer would
+otherwise read as a network fault.
+
 ## Dependencies
 
 `core-ktx`, `appcompat`, and coroutines. JSON comes from the platform's
@@ -78,21 +91,32 @@ Run against a Pixel 9 emulator, **Android 17 (API 37, arm64)**, 2026-08-29:
 | album | `RELATIVE_PATH` = `DCIM/TDG <job>`, `IS_PENDING` cleared |
 | wipe | "Removed 18 of 18"; MediaStore rows back to zero, receipt cleared |
 
+Then on a **physical Galaxy S24 (SM-S921U1), Android 16, One UI**, 2026-08-30 —
+which is the run that counts, because an emulator models none of the three risks
+§4 of the plan names:
+
+| | |
+|---|---|
+| fill | 144 files (139 photos, 5 videos), 500 MB in 42 s over Wi-Fi — 11.9 MB/s |
+| indexing | 144 / 144, capture times within 0.997 s of the manifest |
+| album | `DCIM/TDG 053a7b` present — but under **View all**, not the curated albums row |
+| undated assets | the screenshot and the zero-byte file land under "Today", and the zero-byte file becomes the album cover |
+| 10 GB on battery | 3,466 files, **14.9 min unplugged with the screen off** — the foreground service was never suspended, at a cost of ~3% battery |
+
+Full results in [`docs/conformance/`](../../docs/conformance/): the
+[500 MB run](../../docs/conformance/galaxy-s24-physical-android-16.md) and the
+[10 GB battery run](../../docs/conformance/galaxy-s24-physical-10gb-battery.md).
+
 ## Known limits
 
-- **Not tested on a physical handset.** An emulator does not exercise Samsung's
-  battery manager, One UI's Gallery grouping, or slow eMMC storage — the three
-  things §4 of the plan says to check. Emulator success is necessary, not
-  sufficient.
-- **Android 11 floor is declared, not verified.** `minSdk` is 30 but the only
-  run so far is API 37.
+- **Only one physical handset, and it is a flagship.** The Galaxy S24 is
+  covered, battery manager included. The budget tier — Galaxy A-series, slow
+  storage, tighter battery management — is untested, as is a physical Pixel.
+- **Android 11 floor is declared, not verified.** `minSdk` is 30 but the runs so
+  far are API 36 and 37.
 - **Resume is per-file, not per-byte.** A killed transfer re-fetches the file it
   was on. The `Range` support in `Downloader` is there for it, but the service
   currently restarts a partial file rather than continuing it.
-- **Wipe leaves the empty album directory.** The rows and bytes go, but
-  `DCIM/TDG <job>/` remains; scoped storage gives the app no way to remove a
-  directory it does not own media in. Some galleries may show an empty album
-  until the OS tidies it.
 - **One job at a time.** Loading a second pack while one is running is ignored
   rather than queued.
 - **Cleartext HTTP is permitted** so the app can reach a plain-HTTP control

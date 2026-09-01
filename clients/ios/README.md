@@ -8,12 +8,16 @@ Phase 5 of [the plan](../../PLAN.md).
 ## Build and run
 
 ```bash
-export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+xcode-select -p          # must print a full Xcode, not the Command Line Tools
 ```
 
-`DEVELOPER_DIR` is used rather than `xcode-select -s` because the latter needs an
-admin password. The project is hand-written and uses a file-system-synchronized
-group, so new Swift files in `TdgLoader/` are picked up with no project edit.
+If it prints `/Library/Developer/CommandLineTools`, either run
+`sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` once, or
+export `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` per shell —
+the second needs no admin password, which is why the build instructions here
+used to insist on it. The project is hand-written and uses a
+file-system-synchronized group, so new Swift files in `TdgLoader/` are picked up
+with no project edit.
 
 ### Simulator — no signing identity needed
 
@@ -125,6 +129,12 @@ Photos groups a timeline by. Measured delta against the manifest: **0.000 s**.
 **Downloads land in a temp file**, never in memory, and are handed to Photos
 with `shouldMoveFile` — a 4 GB clip must not become 4 GB of resident memory.
 
+**A pruned pack is reported as a pruned pack.** The control plane answers
+`410 Gone` once a pack's media has been reclaimed, and `LoaderError` keeps that
+case separate from an unreachable host — "could not find that pack" would
+contradict a 410, which says precisely where the pack went and that rebuilding
+it will bring it back.
+
 **A receipt per job**, written atomically, keyed on the `PHAsset`
 **localIdentifier**. Photos renames every imported asset to `IMG_NNNN`, so a
 filename-keyed wipe would find nothing; the identifier is also exactly what
@@ -144,14 +154,29 @@ iPhone 17 Pro simulator, **iOS 26.5**, 2026-08-29, against a 24-file pack
 | album | created and populated when full access was granted; correctly skipped under add-only |
 | wipe | "Removed 24 assets"; 0 live imported assets left, the 6 stock photos untouched |
 
+Then on a **physical iPhone 15 Pro, iOS 26.6.1**, 2026-08-30 — the run that
+found what no simulator had:
+
+| | |
+|---|---|
+| import | 71 of 72 accepted; the single refusal is the zero-byte file, which is correct |
+| `creationDate` | exact against the manifest |
+| prompts | local network, then add-only photos, then full access at wipe — three, in that order |
+| bugs found | one invalid asset failed the whole `performChanges` batch; and `shouldMoveFile` consumed the staged file so the per-asset retry misreported good assets. Both fixed |
+
+Full results in
+[`docs/conformance/iphone-15-pro-physical-ios-26.6.1.md`](../../docs/conformance/iphone-15-pro-physical-ios-26.6.1.md).
+
 ## Known limits
 
-- **Never run on a physical iPhone.** Signing is configured and a valid
-  identity now exists, but the app has only ever run on a simulator and has not
-  been near TestFlight. A real device adds a real Photos library and iCloud
-  Photos syncing behaviour that a simulator does not model.
+- **Installed by cable only.** A physical iPhone 15 Pro is covered, but
+  distribution is a development build over USB — nothing has been near
+  TestFlight, and the profile expires like any development profile.
+- **`tdg verify` cannot reach a physical iPhone.** There is no `simctl` for real
+  hardware, so the device run was checked by pulling the loader's own receipt off
+  the phone with `devicectl` rather than by querying the Photos database.
 - **iOS 17 floor is declared, not verified.** `IPHONEOS_DEPLOYMENT_TARGET` is
-  17.0 but the only runs are on 26.5.
+  17.0 but the runs are on 26.5 and 26.6.1.
 - **Deleted assets go to Recently Deleted for 30 days.** Space is not reclaimed
   immediately, which matters when the point of the exercise was filling a device.
 - **Resume is per-file, not per-byte.** A killed transfer re-fetches the file it

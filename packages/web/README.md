@@ -43,6 +43,19 @@ Each build is a `tdg build` **subprocess**, not an in-process call:
 Progress is read from that checkpoint rather than scraped from stdout, so it is
 byte-accurate and stays correct across a resume where a line count would not.
 
+## The jobs list
+
+The four most recent jobs are full cards — progress, log, pairing code, the
+actions. Everything older folds into **one line each** behind a disclosure that
+remembers whether it was open, because a job list is append-only and a month of
+builds otherwise pushes the thing you are actually watching off the screen. A
+folded row still carries its status, size and pairing code; opening the card is
+one click away.
+
+A job that changes status while the fold is closed still forces a repaint — the
+list is polled, and a signature over the statuses is what decides whether the
+cached survey of reclaimable space is still good.
+
 ## API
 
 Two halves. The browser half:
