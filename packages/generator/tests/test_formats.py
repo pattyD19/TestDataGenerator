@@ -11,6 +11,7 @@ Run it:
 
     python3 packages/generator/tests/test_formats.py
 """
+import itertools
 import json
 import os
 import re
@@ -68,6 +69,33 @@ def main():
           "and the bytes on disk match what the manifest claims")
     check(len(doc["items"]) == len({i["name"] for i in doc["items"]}),
           "with no name reused by a photo that was priced out and deleted")
+
+    # ---- no two stills are the same picture -------------------------------
+    # Byte uniqueness is free and proves nothing: different EXIF alone
+    # guarantees it. Before the uniqueness gate, a 333-photo pack held 7
+    # perceptually identical pairs and a 2,227-photo pack held 268, because
+    # every still was a crop of one of twelve seeds. The threshold here is
+    # deliberately tight (<= 2 bits); dHash produces false positives around 5
+    # on smooth subjects like open sky, and this must fail on real repeats
+    # rather than on those.
+    print("visual uniqueness")
+    pack = os.path.join(tmp, "unique")
+    doc = build(pack, ["--photo-fraction", "1.0"], size="120MB", job="uniq01")
+    stills = [i for i in doc["items"]
+              if i["kind"] == "image" and not i.get("note") and i["bytes"] > 0]
+    hashes = {}
+    for i in stills:
+        with Image.open(os.path.join(pack, i["name"])) as im:
+            hashes[i["name"]] = amplify.dhash(im)
+    vals = list(hashes.values())
+    check(len(stills) >= 20, f"the pack has enough stills to be a real test ({len(stills)})")
+    check(len(set(vals)) == len(vals),
+          f"no two stills share a perceptual hash ({len(set(vals))} of {len(vals)} distinct)")
+    close = [(a, b) for a, b in itertools.combinations(hashes, 2)
+             if bin(hashes[a] ^ hashes[b]).count("1") <= 2]
+    check(not close,
+          "and none are within 2 bits of each other"
+          + (f" — {close[0][0]} vs {close[0][1]}" if close else ""))
 
     # ---- HEIC -------------------------------------------------------------
     print("HEIC")

@@ -41,12 +41,31 @@ def capture_dates(count, since: datetime, until: datetime, rng):
     return out
 
 
+# A new still must differ from every other still cut from the SAME seed by
+# more than this many bits of its 64-bit perceptual hash. Six is one better
+# than the five-bit threshold a dedupe engine typically calls a match, so a
+# pack leaves no pair inside the band it would flag.
+SIMILAR_BITS = 6
+
+
+def _too_similar(seen, seed_path, phash):
+    """Only same-seed pairs can collide.
+
+    Crops of two different seeds are unrelated pictures — measured median
+    distance 32 of 64 bits, which is what unrelated looks like. Bucketing by
+    seed turns an O(n^2) sweep over the whole pack into O(n^2 / seeds), which
+    is what makes the check affordable on a 26,000-file build.
+    """
+    return any(bin(phash ^ o).count("1") <= SIMILAR_BITS
+               for o in seen.get(seed_path, ()))
+
+
 def _photo_task(args):
     """Top-level so it survives pickling into the worker pool."""
     (seed_path, out_path, persona, when, index, job_id, gps, fmt) = args
-    size = amplify.render_photo(seed_path, out_path, persona, when, index, job_id,
-                                gps=gps, fmt=fmt)
-    return out_path, size
+    size, phash = amplify.render_photo(seed_path, out_path, persona, when, index,
+                                       job_id, gps=gps, fmt=fmt, with_hash=True)
+    return out_path, size, phash
 
 
 def _video_task(args):
@@ -437,6 +456,10 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
         idx += 1
         return name, when, gps, task, fmt
 
+    # Perceptual hashes of the ordinary stills, bucketed by the seed they were
+    # cut from. Edge cases are deliberately similar and never enter this.
+    seen_hashes, redrawn, gate_on = {}, 0, True
+
     with ProcessPoolExecutor(max_workers=jobs) as pool:
         while phase == "photo":
             remaining = photo_ceiling - total
@@ -460,33 +483,58 @@ def build_pack(out_dir, seed_dir, target_bytes, persona_key="iphone-15-pro",
                 # downstream can bring a pack back down, since trim and pad
                 # only ever add. One batch overshooting was enough to land a
                 # 24 MB pack 1.02 MB over, with no way to recover.
-                fresh, kept = [], 0
-                for (name, when, gps, _, fmt), (_, size) in zip(batch, sized):
+                fresh, consumed = [], 0
+                for (name, when, gps, task, fmt), (_, size, phash) in zip(batch, sized):
                     if total + size > photo_ceiling:
-                        break
+                        break                   # this one and everything after
+                    consumed += 1
+                    if gate_on and _too_similar(seen_hashes, task[0], phash):
+                        os.remove(task[1])      # a near-copy of one already in
+                        redrawn += 1
+                        continue                # leaves a gap in the numbering,
+                        # which is what a real camera roll looks like anyway
+                    seen_hashes.setdefault(task[0], []).append(phash)
                     fresh.append(record(name, "image", size, when, gps, fmt=fmt))
-                    kept += 1
-                for _, _, _, task, _ in batch[kept:]:
+                for _, _, _, task, _ in batch[consumed:]:
                     if os.path.exists(task[1]):
                         os.remove(task[1])      # encoded, then priced out
-                idx -= n - kept                 # keep the numbering contiguous
+                kept = len(fresh)
+                idx -= n - consumed             # priced-out names are reusable
                 made += kept
+                if gate_on and redrawn > 50 + 2 * made:
+                    # The pool is too small for a pack this size. Say so rather
+                    # than spin: an exact size is the harder promise to keep.
+                    gate_on = False
+                    progress("  uniqueness gate off — seed pool too small for "
+                             "this many photos; run `tdg harvest` for more")
                 save(fresh)
                 progress(f"  photos {made}  total {sizing.human(total)} / "
                          f"{sizing.human(target_bytes)}")
-                if kept < n:
-                    phase = "trim"              # the ceiling is reached
+                if consumed < n:
+                    # The ceiling — not the gate. A rejected near-copy reduces
+                    # `kept` without meaning the photo budget is spent, and
+                    # ending the phase on that dumped the remaining budget into
+                    # one enormous trim clip: 234 photos and a 676 MB video
+                    # where the pack should have held ~670 stills.
+                    phase = "trim"
                 continue
 
             # Tail: one at a time, discarding any file that would overshoot.
             name, when, gps, task, fmt = next_task()
-            _, size = _photo_task(task)
+            _, size, phash = _photo_task(task)
             if total + size > photo_ceiling:
                 os.remove(task[1])
                 idx -= 1
                 phase = "trim"
                 save([])
                 break
+            if gate_on and _too_similar(seen_hashes, task[0], phash):
+                os.remove(task[1])
+                redrawn += 1
+                if redrawn > 50 + 2 * made:
+                    gate_on = False
+                continue                        # draw another
+            seen_hashes.setdefault(task[0], []).append(phash)
             made += 1
             save([record(name, "image", size, when, gps, fmt=fmt)])
 

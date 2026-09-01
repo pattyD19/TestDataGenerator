@@ -13,7 +13,7 @@ import random
 import shutil
 import subprocess
 
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageOps
 
 from .exifwrite import build_exif, ffmpeg_time, set_mtime
 
@@ -95,9 +95,27 @@ def _rng(job_id, index):
     return random.Random(int.from_bytes(h[:8], "big"))
 
 
+def dhash(img, size=8):
+    """A 64-bit perceptual hash — does this LOOK like one already made?
+
+    Byte uniqueness is free: different EXIF alone guarantees it, and says
+    nothing about whether two files are the same picture. This is the cheap
+    proxy for the question a dedupe engine actually asks, and it is computed
+    from the image already in memory, so it costs no extra decode.
+    """
+    g = img.convert("L").resize((size + 1, size), Image.LANCZOS)
+    raw = g.tobytes()                      # mode "L": one byte per pixel
+    bits = 0
+    for r in range(size):
+        base = r * (size + 1)
+        for c in range(size):
+            bits = (bits << 1) | (1 if raw[base + c] < raw[base + c + 1] else 0)
+    return bits
+
+
 def render_photo(seed_path, out_path, persona, when, index, job_id,
                  target_size=None, quality=None, gps=None, fmt="jpeg",
-                 jitter=True):
+                 jitter=True, with_hash=False):
     """Crop/scale/jitter a seed still and write it with full EXIF.
 
     `fmt` is "jpeg" or "heic". HEIC goes via a JPEG so the hand-rolled EXIF
@@ -113,7 +131,7 @@ def render_photo(seed_path, out_path, persona, when, index, job_id,
         tw, th = th, tw
 
     # random crop window, then resample to the target
-    scale = rng.uniform(0.55, 1.0)
+    scale = rng.uniform(0.32, 1.0)      # wider than the frame it came from
     ar = tw / th
     cw = min(src.width, int(src.width * scale))
     ch = int(cw / ar)
@@ -126,6 +144,16 @@ def render_photo(seed_path, out_path, persona, when, index, job_id,
 
     if rng.random() < 0.35:
         img = img.rotate(rng.uniform(-1.5, 1.5), resample=Image.BICUBIC, expand=False)
+    if rng.random() < 0.5:
+        img = ImageOps.mirror(img)
+
+    # Tone, not just geometry. A phone's auto white balance and exposure are
+    # never identical twice, and two crops of one seed that overlap will still
+    # diverge once their colour does — which is what stops a finite seed pool
+    # producing pictures a dedupe engine would call the same.
+    img = ImageEnhance.Color(img).enhance(rng.uniform(0.72, 1.32))
+    img = ImageEnhance.Brightness(img).enhance(rng.uniform(0.86, 1.16))
+    img = ImageEnhance.Contrast(img).enhance(rng.uniform(0.84, 1.22))
 
     q = quality if quality is not None else rng.randint(*persona.jpeg_quality)
     iso = int(rng.triangular(persona.iso_range[0], persona.iso_range[1], 120))
@@ -138,7 +166,10 @@ def render_photo(seed_path, out_path, persona, when, index, job_id,
     if fmt == "heic":
         _to_heic(jpeg_path, out_path, q)
     set_mtime(out_path, when)
-    return os.path.getsize(out_path)
+    size = os.path.getsize(out_path)
+    # Hashed from the pixels as saved, before any JPEG comment padding the size
+    # planner may add later — padding changes bytes, never the picture.
+    return (size, dhash(img)) if with_hash else size
 
 
 def _ffmpeg(args):
