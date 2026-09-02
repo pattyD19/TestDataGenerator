@@ -77,3 +77,14 @@ python3 packages/generator/tests/test_resume.py    # interrupted builds
 python3 packages/generator/tests/test_formats.py   # HEIC, HEVC, edge cases
 python3 packages/web/tests/test_server.py          # the control plane
 ```
+
+## Licence
+
+The code in this repository is [MIT licensed](./LICENSE).
+
+**That covers the software, not the pictures.** No media is distributed here —
+`seed-pool/` is gitignored and every clone fetches its own with `tdg harvest`,
+which takes CC0 and public-domain assets only unless you pass `--any-license`.
+Each seed's licence, author and origin is recorded in `seed-pool/seeds.json`,
+and every pack ships a `LICENSES.csv` carrying the provenance of the seeds it
+was built from. If you redistribute a *pack*, that CSV is what governs it.
