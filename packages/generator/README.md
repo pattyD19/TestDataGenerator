@@ -357,8 +357,10 @@ passed it.
 
 ## Known limits
 
-- **JPEG and MP4/H.264 only.** HEIC and HEVC are Phase 7. Real iPhones shoot
-  HEIC, so a pack from this generator does not exercise that path.
+- **HEIC needs an encoder the generator does not carry.** JPEG and H.264/HEVC
+  are self-contained, but HEIC is HEVC inside a HEIF container: it needs
+  `pillow-heif` or macOS's `sips`, and refuses with an install line when
+  neither is present. See [Formats](#formats).
 - **Manifest schema v2 is not v1.** In v1 `taken_at` was a naive local time
   with no offset, so packs built before the timezone fix cannot be compared
   instant-for-instant against ones built after. Rebuild rather than mix. The
@@ -395,6 +397,8 @@ passed it.
   to an emulator ran at 4.2 MB/s, so a 64 GB fill over adb is hours. Wi-Fi to a
   handset on the LAN is the faster path, and the reason the generator is meant
   to run on the LAN rather than in the cloud.
-- Verified for real on both device targets (see below). The remaining unproven
-  path is deletion on a **physical iPhone**, which needs the Phase 5 loader app
-  that does not exist yet.
+- Verified for real on both device targets (see below), and on physical
+  hardware through the loader apps — a Galaxy S24 and an iPhone 15 Pro,
+  deletion included. What `tdg verify` still cannot do is query a **physical
+  iPhone**: there is no `simctl` for real hardware, so that run was checked
+  against the loader's own receipt instead.

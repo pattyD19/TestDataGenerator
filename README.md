@@ -3,7 +3,8 @@
 Fills mobile devices with N GB of open-license photos and videos, in the native
 camera roll, with realistic EXIF — for testing gallery-scanning apps.
 
-See [PLAN.md](./PLAN.md) for the full build plan.
+**New here? Start with the [User Manual](./docs/USER-MANUAL.md)** — clone to filled
+handset, plus an FAQ. See [PLAN.md](./PLAN.md) for the full build plan.
 
 ## Quick start
 
