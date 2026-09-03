@@ -164,8 +164,20 @@ found what no simulator had:
 | prompts | local network, then add-only photos, then full access at wipe — three, in that order |
 | bugs found | one invalid asset failed the whole `performChanges` batch; and `shouldMoveFile` consumed the staged file so the per-asset retry misreported good assets. Both fixed |
 
-Full results in
-[`docs/conformance/iphone-15-pro-physical-ios-26.6.1.md`](../../docs/conformance/iphone-15-pro-physical-ios-26.6.1.md).
+And at volume on the same phone, 2026-09-03 — the run that closes the plan's
+Phase 0 question for iOS:
+
+| | |
+|---|---|
+| import | **900 of 900** stills, 2.00 GiB, no refusals |
+| batching | nine `performChanges` transactions of 100, no stall and no retry path taken |
+| throughput | ~19 MB/s over Wi-Fi — faster than the Galaxy S24 on the same network |
+| unattended | no prompt: add-only was already granted, so one `devicectl` launch ran the whole fill |
+| wipe | all **900 removed** in one confirmation, receipt cleared — deletion at volume, which no earlier run had exercised past 72 assets |
+
+Full results in [`docs/conformance/`](../../docs/conformance/): the
+[first device run](../../docs/conformance/iphone-15-pro-physical-ios-26.6.1.md)
+and the [900-asset run](../../docs/conformance/iphone-15-pro-physical-900-assets.md).
 
 ## Known limits
 
