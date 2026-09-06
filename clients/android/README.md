@@ -58,12 +58,45 @@ reliable handle for an imported asset, and the URI is what `delete` needs.
 back or delete media it owns. Wipe is a plain `delete` with no system prompt,
 which is what makes it usable daily.
 
+**Ownership does not survive an uninstall, and that is the whole difficulty.**
+Removing the app clears `owner_package_name` on every row it created — the
+assets stay, the ownership goes. A reinstalled app is then no longer the owner,
+and MediaStore refuses its deletes *silently*: no exception, no permission
+error, just a return of 0. Measured on a Galaxy S24: 169 assets, "Removed 0 of
+169", every row still present with a null owner.
+
+So the wipe reads the delete's own return value rather than trusting it. What
+comes back refused goes to `MediaStore.createDeleteRequest`, which shows one
+system dialog naming the count and deletes regardless of owner. That request
+needs an Activity — a Service cannot launch an `IntentSender` — which is why
+the wipe hands off to `MainActivity` at that point instead of finishing in the
+foreground service.
+
+Two things this cost, both worth remembering. Detecting the refused set by
+*querying* for surviving rows does not work: an app that may not delete unowned
+media may not read it either, so the query comes back empty and the wipe
+concludes it succeeded. And the withdrawal of the server-side copy has to run
+off the main thread — it arrives from an activity-result callback, where
+`HttpURLConnection` throws `NetworkOnMainThreadException`, which the
+best-effort `catch` in `Custody` swallows without trace.
+
 **Wipe takes the folder too.** Deleting the rows leaves `DCIM/TDG <job>/` behind
 as an empty album in some galleries, so wipe reads each asset's `RELATIVE_PATH`
 *before* deleting it and then removes any of those directories that came out
 empty. Scoped storage permits exactly this and no more: a directory the app
 created, with nothing left in it. A folder still holding media the app does not
 own is left alone.
+
+**The receipt is also deposited with the control plane.** It stays
+authoritative on the device — but it lives in app storage, so uninstalling the
+app destroys it and leaves every asset in the gallery with nothing left to name
+it. After a fill the app POSTs a copy to `/api/receipts`, keyed on
+`Settings.Secure.ANDROID_ID`, which survives a reinstall and is reset only by a
+factory reset — the one event that takes the assets too. Pairing again on a
+fresh install recovers it, and `adopt` refuses to overwrite a receipt that still
+has entries, so the device can never lose ground to its own backup. Every call
+is best effort: an unreachable control plane must not fail a fill or block a
+wipe.
 
 **A pruned pack is said out loud, not discovered.** The control plane answers
 `410 Gone` for a pack whose media has been reclaimed, so `Downloader` keeps the
@@ -117,6 +150,10 @@ Full results in [`docs/conformance/`](../../docs/conformance/): the
 - **Resume is per-file, not per-byte.** A killed transfer re-fetches the file it
   was on. The `Range` support in `Downloader` is there for it, but the service
   currently restarts a partial file rather than continuing it.
+- **A recovered wipe needs one tap.** The everyday wipe is still promptless.
+  But after an uninstall the app no longer owns what it wrote, so removing it
+  goes through the system's delete dialog — which cannot be scripted, so an
+  unattended wipe is not possible in that case.
 - **One job at a time.** Loading a second pack while one is running is ignored
   rather than queued.
 - **Cleartext HTTP is permitted** so the app can reach a plain-HTTP control

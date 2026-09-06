@@ -10,11 +10,18 @@ removed separately, and the distinction is the whole point of this module:
     discover the absence by failing halfway through a transfer.
   * **delete** removes both.
 
-Neither one touches receipts. The pack is the *source*; the receipt written at
-load time is what a wipe reads, and it lives on the device (or under
-~/.tdg/receipts for CLI loads), never inside the pack. A device stays fully
-cleanable long after the pack it came from is gone — which is the property that
-makes reclaiming space safe at all.
+**Prune never touches receipts, and delete deliberately does.** The pack is the
+*source*; the receipt written at load time is what a wipe reads, and it lives on
+the device (or under ~/.tdg/receipts for CLI loads), never inside the pack. The
+control plane also keeps a copy of what each device was given, so a phone stays
+cleanable even if the app that filled it is uninstalled — see the receipts table
+in tdgweb.store.
+
+Pruning leaves that copy alone, which is what makes reclaiming space safe: a
+device stays fully cleanable long after the pack it came from is gone. Deleting
+the row removes the copy with it, and is therefore the one operation that can
+strand assets on a device with nothing left to name them — so the API refuses a
+delete while any device still carries the pack unless it is forced.
 
 A pruned job can still be rebuilt: the job id and seed are in the row, and the
 generator is deterministic, so re-running it reproduces the same pack byte for

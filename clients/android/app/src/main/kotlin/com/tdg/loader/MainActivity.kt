@@ -13,6 +13,8 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -42,6 +44,29 @@ class MainActivity : AppCompatActivity() {
 
     private var manifestUrl: String? = null
     private var jobId: String? = null
+    private var token: String? = null
+
+    /** The job whose assets the system is currently asking about. */
+    private var awaitingConsent: String? = null
+    private var consentCount: Int = 0
+
+    /**
+     * The system's "allow this app to delete these items?" dialog.
+     *
+     * Needed because an uninstall clears MediaStore ownership: a reinstalled
+     * app can recover its receipt and still not be allowed to act on it. This
+     * is the supported way to close that gap, and it has to live on the
+     * Activity — a Service cannot launch an IntentSender.
+     */
+    private val consent = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        val job = awaitingConsent
+        awaitingConsent = null
+        if (job == null) return@registerForActivityResult
+        if (result.resultCode == RESULT_OK) finishWipe(job, consentCount)
+        else summary.text = "Left in place — nothing was removed."
+    }
 
     private val prefs by lazy { getSharedPreferences("tdg", Context.MODE_PRIVATE) }
 
@@ -56,6 +81,9 @@ class MainActivity : AppCompatActivity() {
             if (total > 0) {
                 progress.visibility = View.VISIBLE
                 progress.progress = ((done * 1000) / total).toInt()
+            }
+            if (state == "consent") {
+                intent.getStringExtra(LoaderService.EXTRA_JOB_ID)?.let { askConsent(it) }
             }
             val busy = state == "running"
             cancelBtn.visibility = if (busy) View.VISIBLE else View.GONE
@@ -135,7 +163,20 @@ class MainActivity : AppCompatActivity() {
                 }
                 val o = JSONObject(body)
                 jobId = o.getString("job_id")
+                token = o.optString("token", pin)
                 manifestUrl = base + o.getString("manifest_url")
+                // A reinstalled app has no receipt for a pack this device may
+                // still be carrying. Ask the control plane before offering to
+                // fill again, or the assets already here become unremovable
+                // and a second fill lands on top of them.
+                val recovered = withContext(Dispatchers.IO) {
+                    Custody.recover(this@MainActivity, base, token!!,
+                        Receipt(this@MainActivity, jobId!!))
+                }
+                if (recovered > 0) {
+                    prefs.edit().putString("token-${jobId}", token).apply()
+                    refreshReceipts()
+                }
                 val label = o.optString("label", "")
                 val free = MediaWriter(this@MainActivity).freeBytes()
                 val need = o.getLong("total_bytes")
@@ -144,6 +185,9 @@ class MainActivity : AppCompatActivity() {
                     append("${o.getInt("file_count")} files, ${human(need)}\n")
                     append("${human(free)} free on this device")
                     if (free in 0 until need) append("  — NOT ENOUGH SPACE")
+                    if (recovered > 0) append(
+                        "\n\nRecovered a receipt for $recovered assets this " +
+                        "device already holds — Wipe can remove them.")
                 }
                 loadBtn.isEnabled = free < 0 || free >= need
             } catch (e: Downloader.HttpError) {
@@ -169,7 +213,63 @@ class MainActivity : AppCompatActivity() {
             action = LoaderService.ACTION_LOAD
             putExtra(LoaderService.EXTRA_MANIFEST_URL, url)
             putExtra(LoaderService.EXTRA_JOB_ID, jobId)
+            putExtra(LoaderService.EXTRA_HOST, prefs.getString("host", "").orEmpty())
+            putExtra(LoaderService.EXTRA_TOKEN, token.orEmpty())
         })
+        // Remembered per job, because a wipe may happen days later from a
+        // fresh launch where nothing has been paired.
+        prefs.edit().putString("token-$jobId", token).apply()
+    }
+
+    /**
+     * Ask the system for permission to delete assets this app no longer owns.
+     *
+     * The receipt still names them — recovery restored that — but ownership
+     * went with the uninstall, so MediaStore refuses a plain delete and says
+     * nothing about it. One dialog covers the whole set.
+     */
+    private fun askConsent(job: String) {
+        val receipt = Receipt(this, job)
+        val writer = MediaWriter(this)
+        // Re-running the delete is how the refused set is identified: it is
+        // idempotent (anything already gone simply reports nothing removed)
+        // and it is the only reliable signal, since unowned media cannot be
+        // queried either.
+        val refused = writer.delete(receipt.uris())
+        if (refused.isEmpty()) { finishWipe(job, receipt.count); return }
+        awaitingConsent = job
+        consentCount = receipt.count
+        try {
+            consent.launch(IntentSenderRequest.Builder(
+                writer.deleteRequest(refused)).build())
+        } catch (e: Exception) {
+            awaitingConsent = null
+            summary.text = "Could not ask to remove them: ${e.message}"
+        }
+    }
+
+    /**
+     * After the system has done the deleting, tidy up what it does not.
+     *
+     * RESULT_OK from a delete request means the system removed them, so this
+     * takes it at its word rather than trying to confirm by reading rows the
+     * app has no access to.
+     */
+    private fun finishWipe(job: String, total: Int) {
+        val receipt = Receipt(this, job)
+        val writer = MediaWriter(this)
+        receipt.clear()
+        // Off the main thread: this arrives from an activity-result callback,
+        // and HttpURLConnection on the UI thread throws
+        // NetworkOnMainThreadException — which Custody swallows by design, so
+        // the withdrawal simply never happened and the server kept claiming
+        // the device still held 169 assets.
+        val h = prefs.getString("host", "").orEmpty()
+        val t = prefs.getString("token-$job", "").orEmpty()
+        lifecycleScope.launch(Dispatchers.IO) { Custody.forget(this@MainActivity, h, t) }
+        writer.removeEmptyFolders(setOf("DCIM/TDG $job"))
+        summary.text = "Removed $total of $total"
+        refreshReceipts()
     }
 
     private fun refreshReceipts() {
@@ -203,6 +303,10 @@ class MainActivity : AppCompatActivity() {
                         Intent(this, LoaderService::class.java).apply {
                             action = LoaderService.ACTION_WIPE
                             putExtra(LoaderService.EXTRA_JOB_ID, j)
+                            putExtra(LoaderService.EXTRA_HOST,
+                                prefs.getString("host", "").orEmpty())
+                            putExtra(LoaderService.EXTRA_TOKEN,
+                                prefs.getString("token-$j", "").orEmpty())
                         })
                 }
             }

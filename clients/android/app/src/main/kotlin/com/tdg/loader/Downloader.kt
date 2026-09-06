@@ -72,6 +72,30 @@ object Downloader {
         }
     }
 
+    /**
+     * Send a JSON body, ignoring whatever comes back beyond "did it work".
+     *
+     * Used to deposit a receipt with the control plane and to withdraw it
+     * after a wipe. Both are best-effort by design — see [Custody].
+     */
+    fun send(url: String, method: String, json: String?): Int {
+        val conn = open(url)
+        try {
+            conn.requestMethod = method
+            if (json != null) {
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                val bytes = json.toByteArray()
+                conn.setFixedLengthStreamingMode(bytes.size)
+                conn.outputStream.use { it.write(bytes) }
+            }
+            requireOk(conn, url)
+            return conn.responseCode
+        } finally {
+            conn.disconnect()
+        }
+    }
+
     private fun open(url: String): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = CONNECT_TIMEOUT

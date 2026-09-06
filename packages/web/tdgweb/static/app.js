@@ -137,13 +137,20 @@ function jobCard(job) {
   return el;
 }
 
+// A pack a phone is still holding. Worth saying on the row: prune keeps the
+// receipts that make that phone cleanable, delete throws them away.
+function carrying(job) {
+  const n = job.receipt_devices || 0;
+  return n ? ` · on ${n} device${n > 1 ? "s" : ""}` : "";
+}
+
 function paint(el, job) {
   el.querySelector(".fill").style.width = job.percent + "%";
   el.querySelector(".status").className = "status " + job.status;
   el.querySelector(".status").textContent = job.status;
   el.querySelector(".counts").textContent =
     `${human(job.done_bytes)} of ${human(job.target_bytes)}` +
-    (job.file_count ? ` · ${job.file_count} files` : "");
+    (job.file_count ? ` · ${job.file_count} files` : "") + carrying(job);
   el.querySelector(".msg").textContent = job.message || "";
   const act = el.querySelector(".act");
   if (job.status === "running") { act.textContent = "cancel"; act.hidden = false; }
@@ -162,7 +169,10 @@ function paint(el, job) {
   } else if (job.status === "pruned") {
     pr.hidden = false;
     pr.textContent = "delete";
-    pr.title = "Remove this job from the list";
+    pr.title = job.receipt_devices
+      ? "Refused while a device still carries this pack — deleting the job "
+        + "discards the receipt that says how to clean it"
+      : "Remove this job from the list";
   } else {
     pr.hidden = false;
     pr.textContent = "prune";
@@ -171,6 +181,7 @@ function paint(el, job) {
 
   // A pruned pack has nothing to hand a device, so it offers neither.
   const gone = job.status === "pruned";
+  el.dataset.carrying = job.receipt_devices || 0;
   el.querySelector(".manifest").hidden = job.status !== "done";
   el.querySelector(".pair").hidden = gone;
   el.dataset.status = job.status;
@@ -215,7 +226,7 @@ function paintRow(el, job) {
   st.textContent = job.status;
   el.querySelector(".ometa").textContent =
     (job.file_count ? `${job.file_count} files · ` : "") +
-    human(job.done_bytes) + " · " + ago(job.created_at);
+    human(job.done_bytes) + " · " + ago(job.created_at) + carrying(job);
 
   // The same two actions the cards offer, so an old job can still be
   // reclaimed or rebuilt without expanding it into one.
@@ -227,6 +238,7 @@ function paintRow(el, job) {
   pr.textContent = job.status === "pruned" ? "delete" : "prune";
   pr.hidden = false;
   el.dataset.status = job.status;
+  el.dataset.carrying = job.receipt_devices || 0;
 }
 
 async function pruneOn(id, el) {
@@ -236,7 +248,12 @@ async function pruneOn(id, el) {
   const partial = status === "failed" || status === "cancelled";
   let msg, path, opts;
   if (status === "pruned") {
-    msg = "Remove this job from the list?\n\nIts pack is already gone.";
+    const n = Number(el.dataset.carrying || 0);
+    msg = n
+      ? `Remove this job from the list?\n\n${n} device(s) still carry this ` +
+        "pack, and deleting the job discards the receipt that says how to " +
+        "clean them. Wipe those devices first."
+      : "Remove this job from the list?\n\nIts pack is already gone.";
     path = `/api/jobs/${id}`;
     opts = { method: "DELETE" };
   } else {

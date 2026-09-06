@@ -72,6 +72,10 @@ Two halves. The browser half:
 | `GET /api/prune` | what could be reclaimed and how much it would free |
 | `POST /api/prune` | prune every eligible job (`{"drop_rows":…, "force":…}`) |
 | `POST /api/jobs/<id>/prune` | delete this pack, keep the job (`?force=1` for a partial build) |
+| `POST /api/receipts?token=` | a loader depositing what it wrote onto a device |
+| `GET /api/receipts?token=` | the devices carrying this pack |
+| `GET /api/receipts?token=&device=` | one device's full receipt, for recovery |
+| `DELETE /api/receipts?token=&device=` | that device has wiped |
 | `DELETE /api/jobs/<id>` | delete the pack *and* the job row |
 
 And the pack half, which is what a loader consumes:
@@ -129,6 +133,47 @@ Two guards, because this deletes recursively:
 resumes rather than restarts, and the files are streamed in 64 KB chunks so a
 4 GB asset never becomes 4 GB of resident memory.
 
+## Receipt custody
+
+The device holds the authoritative receipt — it is what a resumed fill reads and
+what the wipe deletes from. But it lives in app storage, so **uninstalling the
+loader destroys it while leaving every asset in the gallery.** The bytes stay;
+the only record of *which* bytes they are goes with the app, and nothing can
+then remove them precisely. "A test you cannot undo is a test you run once" only
+holds if the receipt outlives the app that wrote it.
+
+So a loader deposits a copy here when a fill finishes, and a freshly installed
+app asks for it back the moment it pairs. Three properties make it work:
+
+- **Recovery survives a prune.** The receipt routes resolve the pairing code
+  with `by_token_any`, not `by_token`, so they answer for a job whose pack is
+  long gone. Pairing still refuses a pruned pack — but that is precisely the
+  state where a phone is full and has nothing to explain itself with, so it is
+  the case recovery has to cover.
+- **The device stays the authority.** `adopt` on both clients refuses to
+  overwrite a receipt that already has entries. A copy can only ever be restored
+  onto an app that has none, so recovery cannot lose an identifier.
+- **Deleting a job is refused while a device carries it.** `DELETE
+  /api/jobs/<id>` drops the stored receipts with the row, which is the one
+  operation that can strand assets. It answers `409` naming the number of
+  devices, and points at prune — which reclaims the same disk and keeps them.
+
+A receipt is a few hundred kilobytes at 3,466 assets, so the deposit is a single
+POST at the end of a fill rather than a write per file, and the list endpoint
+omits the entries.
+
+**Restoring the receipt is only half of it.** It gives a device back the
+*identity* of what it holds, not the *authority* to remove it — Android clears
+MediaStore ownership when an app is uninstalled, so the loader has to ask the
+system's permission before it can delete media it recovered. That is a client
+concern, not a server one, but it is the reason recovery is not simply a
+download. See [the Android README](../../clients/android/README.md) and
+[the conformance record](../../docs/conformance/galaxy-s24-receipt-custody.md).
+
+Every client call is **best effort**: a control plane that has moved or gone
+away must never fail a fill or block a wipe, because those depend on the
+device's own receipt. This is a second chance, not a dependency.
+
 ## The pairing code
 
 Every job gets a six-digit code. It gates the manifest and the pack bytes.
@@ -168,5 +213,8 @@ identical checksums, and neither guard could be walked past by accident.
 - **Reclaiming disk is manual.** Prune is a button and a command, not a policy:
   nothing expires a pack on age or a disk-space watermark, so packs still
   accumulate in `--packs` until someone asks for the space back.
+- **Receipt custody is per control plane.** A device recovers from the server it
+  was filled from. Point the app at a different one, or lose the jobs database,
+  and the backup is gone even though the device's own receipt is unaffected.
 - **`--packs` is trusted.** The server serves only files inside a job's own pack
   directory, but it does not sandbox what the generator writes there.

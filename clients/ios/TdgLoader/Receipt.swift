@@ -29,6 +29,20 @@ final class Receipt {
 
     func has(_ name: String) -> Bool { queue.sync { byName[name] != nil } }
 
+    /// name -> localIdentifier, for depositing a copy with the control plane.
+    func entries() -> [String: String] { queue.sync { byName } }
+
+    /// Take on a receipt recovered from the control plane. Only meaningful on
+    /// an empty receipt: a device that still has its own record is the
+    /// authority, and overwriting it could only lose identifiers.
+    func adopt(_ recovered: [String: String]) {
+        queue.sync {
+            guard byName.isEmpty, !recovered.isEmpty else { return }
+            byName = recovered
+            save()
+        }
+    }
+
     func add(_ pairs: [(String, String)]) {
         queue.sync {
             for (name, id) in pairs { byName[name] = id }

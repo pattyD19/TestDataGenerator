@@ -25,6 +25,8 @@ The plan calls for six devices. Four are covered — two emulated, plus a **phys
 | [iPhone 17 Pro, HEIC + HEVC pack](iphone-17-pro-simulator-heic-hevc.md) | the formats a real iPhone actually produces | **passed** |
 | [**iPhone 15 Pro (physical), iOS 26.6.1**](iphone-15-pro-physical-ios-26.6.1.md) | **real hardware** — 71/72 accepted, one correct refusal | **passed** |
 | [**iPhone 15 Pro, 900 assets**](iphone-15-pro-physical-900-assets.md) | **Photos under load** — 900/900 accepted at ~19 MB/s, nine batches, no stall | **passed** |
+| [**Galaxy S24, receipt custody**](galaxy-s24-receipt-custody.md) | **cleanable after the app is deleted** — 169 assets recovered and removed on a reinstalled app | **passed** |
+| [**iPhone 15 Pro, receipt custody**](iphone-15-pro-receipt-custody.md) | **the same, on iOS** — keychain device id survived deletion; recovered identifiers matched the server exactly | **passed** |
 | [**Galaxy S24 (physical), Android 16**](galaxy-s24-physical-android-16.md) | **real hardware** — One UI, Samsung Gallery, 144/144 indexed | **passed** |
 | [**Galaxy S24, 10 GB on battery, screen off**](galaxy-s24-physical-10gb-battery.md) | **the battery-manager risk** — 3,466 assets, 15 min, service never suspended | **passed** |
 | Current Pixel (physical) | AOSP reference on real hardware | not run — no device |

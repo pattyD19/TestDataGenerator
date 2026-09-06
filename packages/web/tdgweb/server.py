@@ -113,9 +113,13 @@ class Handler(BaseHTTPRequestHandler):
                     "lan_url": self.server.lan_url,
                 })
             if path == "/api/jobs":
-                return self._json([self._public(j) for j in self.server.store.list()])
+                carried = self.server.store.receipt_counts()
+                return self._json([self._public(j, carried)
+                                   for j in self.server.store.list()])
             if path == "/api/prune":
                 return self._prune_survey(query)
+            if path == "/api/receipts":
+                return self._receipt_read(query)
             if parts[:2] == ["api", "pair"] and len(parts) == 3:
                 return self._pair(parts[2])
             if parts[:2] == ["api", "jobs"] and len(parts) == 3:
@@ -143,6 +147,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._create()
         if parts == ["api", "prune"]:
             return self._prune_all()
+        if parts == ["api", "receipts"]:
+            return self._receipt_write()
         if parts[:2] == ["api", "jobs"] and len(parts) == 4:
             jid, action = parts[2], parts[3]
             if action == "cancel":
@@ -159,6 +165,8 @@ class Handler(BaseHTTPRequestHandler):
         query = urllib.parse.parse_qs(url.query)
         if parts[:2] == ["api", "jobs"] and len(parts) == 3:
             return self._delete_job(parts[2], query)
+        if parts == ["api", "receipts"]:
+            return self._receipt_forget(query)
         return self._fail(404, "no such route")
 
     # -- handlers -----------------------------------------------------------
@@ -173,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
         with open(path, "rb") as fh:
             self._send(200, fh.read(), ctype)
 
-    def _public(self, job):
+    def _public(self, job, carried=None):
         pct = 0.0
         if job["target_bytes"]:
             pct = min(100.0, 100.0 * job["done_bytes"] / job["target_bytes"])
@@ -185,6 +193,11 @@ class Handler(BaseHTTPRequestHandler):
             "message": job["message"], "created_at": job["created_at"],
             "finished_at": job["finished_at"],
             "manifest_url": f"/api/jobs/{job['id']}/manifest?token={job['token']}",
+            # Devices still holding this pack. Shown in the list because an
+            # operator reclaiming disk should be able to see that a phone out
+            # there is still full, before they are surprised by the refusal.
+            "receipt_devices": (self.server.store.count_receipts(job["id"])
+                                if carried is None else carried.get(job["id"], 0)),
         }
 
     def _one(self, jid):
@@ -227,6 +240,9 @@ class Handler(BaseHTTPRequestHandler):
             "total_bytes": job["done_bytes"],
             "manifest_url": pub["manifest_url"],
             "token": job["token"],
+            # So a freshly installed app can offer to recover instead of
+            # re-downloading a pack this device is already carrying.
+            "receipt_devices": self.server.store.count_receipts(job["id"]),
         })
 
     def _create(self):
@@ -260,6 +276,93 @@ class Handler(BaseHTTPRequestHandler):
             return self._fail(409, "already running")
         self.server.runner.start(jid)
         return self._json(self._public(self.server.store.get(jid)))
+
+    # -- receipt custody ----------------------------------------------------
+
+    # A receipt is a few hundred kilobytes at 3,466 assets. This is generous
+    # for that and still refuses a body that could only be an attack.
+    MAX_RECEIPT_BYTES = 32 << 20
+
+    def _receipt_job(self, query):
+        """Resolve ?token= to a job, for the receipt routes only.
+
+        by_token_any, not by_token: pairing rightly refuses a pruned pack, but
+        receipt recovery is the one thing that must still work after a prune.
+        That is exactly the situation the backup exists for — the pack is gone
+        and a phone is still carrying 64 GB of it.
+        """
+        token = (query.get("token") or [""])[0]
+        if not token:
+            return None, self._fail(401, "a pairing code is required")
+        job = self.server.store.by_token_any(token)
+        if job is None:
+            return None, self._fail(404, "no pack has that code")
+        return job, None
+
+    def _receipt_read(self, query):
+        """GET /api/receipts?token=…[&device=…]
+
+        Without a device, the devices carrying this pack. With one, that
+        device's full receipt — which is how a reinstalled app gets back the
+        handles it needs to remove what it wrote.
+        """
+        job, err = self._receipt_job(query)
+        if job is None:
+            return err
+        device = (query.get("device") or [""])[0]
+        if not device:
+            return self._json({
+                "job": job["id"], "job_id": job["job_id"],
+                "devices": self.server.store.list_receipts(job["id"]),
+            })
+        rec = self.server.store.get_receipt(job["id"], device)
+        if rec is None:
+            return self._fail(404, "no receipt for that device on this pack")
+        return self._json(rec)
+
+    def _receipt_write(self):
+        """POST /api/receipts?token=… — a loader depositing what it wrote.
+
+        The device stays the source of truth; this is the copy that survives
+        the app being uninstalled, which is the only way the assets outlive
+        every record of how to remove them.
+        """
+        url = urllib.parse.urlparse(self.path)
+        job, err = self._receipt_job(urllib.parse.parse_qs(url.query))
+        if job is None:
+            return err
+        declared = int(self.headers.get("Content-Length") or 0)
+        if declared > self.MAX_RECEIPT_BYTES:
+            return self._fail(413, "receipt too large")
+        body = self._body()
+        if body is None:
+            return self._fail(400, "body must be JSON")
+        device = str(body.get("device") or "").strip()
+        if not device:
+            return self._fail(400, "device is required")
+        entries = body.get("entries")
+        if not isinstance(entries, dict):
+            return self._fail(400, "entries must be an object of name -> handle")
+        rec = self.server.store.save_receipt(
+            job["id"], device, {str(k): str(v) for k, v in entries.items()},
+            platform=body.get("platform"), device_name=body.get("device_name"))
+        return self._json({"job": job["id"], "device": device,
+                           "count": rec["count"], "stored": True}, 201)
+
+    def _receipt_forget(self, query):
+        """DELETE /api/receipts?token=…&device=… — the device wiped.
+
+        The backup is only worth keeping while assets are still on the phone;
+        past that it is a stale claim that something needs cleaning up.
+        """
+        job, err = self._receipt_job(query)
+        if job is None:
+            return err
+        device = (query.get("device") or [""])[0]
+        if not device:
+            return self._fail(400, "device is required")
+        return self._json({"forgotten": self.server.store.delete_receipt(
+            job["id"], device)})
 
     # -- reclaiming disk ----------------------------------------------------
 
@@ -312,12 +415,25 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(out)
 
     def _delete_job(self, jid, query):
-        """DELETE /api/jobs/<id> — the pack and the row together."""
+        """DELETE /api/jobs/<id> — the pack and the row together.
+
+        Refused while a device is still carrying this pack, because deleting
+        the row deletes the stored receipts with it, and those are the only
+        remaining record of what to remove from that phone. Prune reclaims the
+        disk without this consequence and is what you almost always want.
+        """
+        force = self._truthy(query, "force")
+        carried = self.server.store.count_receipts(jid)
+        if carried and not force:
+            return self._fail(
+                409, f"{carried} device(s) still carry this pack, and deleting "
+                     "the job discards the receipts that say how to remove it. "
+                     "Wipe those devices first, or prune instead to reclaim the "
+                     "disk and keep them. Delete with force to override")
         try:
             out = prune_mod.prune_job(
                 self.server.store, self.server.packs_dir, jid,
-                drop_row=True, force=self._truthy(query, "force"),
-                runner=self.server.runner)
+                drop_row=True, force=force, runner=self.server.runner)
         except KeyError:
             return self._fail(404, "no such job")
         except prune_mod.PruneError as exc:

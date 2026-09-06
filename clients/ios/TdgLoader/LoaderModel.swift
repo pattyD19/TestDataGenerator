@@ -71,6 +71,12 @@ final class LoaderModel: ObservableObject {
             let url = base.appendingPathComponent("api/pair/\(code)")
             let p = try Pairing.parse(try await Downloader.data(from: url), base: base)
             pairing = p
+            // A reinstalled app has no receipt for a pack this device may still
+            // be carrying. Ask before offering to fill again, or what is already
+            // here becomes unremovable and a second fill lands on top of it.
+            let recovered = await Custody.recover(
+                base: base, token: code, receipt: Receipt(jobId: p.jobId))
+            if recovered > 0 { refreshReceipts() }
             let free = PhotoWriter.freeBytes()
             status = p.label.isEmpty ? "Pack \(p.jobId)" : p.label
             detail = "\(p.fileCount) files, \(ByteFormat.human(p.totalBytes))\n"
@@ -80,6 +86,10 @@ final class LoaderModel: ObservableObject {
                 canLoad = false
             } else {
                 canLoad = true
+            }
+            if recovered > 0 {
+                detail += "\n\nRecovered a receipt for \(recovered) assets this "
+                        + "device already holds — Remove can take them back out."
             }
         } catch let error as LoaderError {
             pairing = nil
@@ -176,6 +186,8 @@ final class LoaderModel: ObservableObject {
         }
         progress = 1
         status = rejected.isEmpty ? "Done" : "Done, with refusals"
+        await Custody.deposit(base: baseURL, token: code, receipt: receipt)
+        UserDefaults.standard.set(code, forKey: "token-\(pack.jobId)")
         detail = "\(receipt.count) assets in “\(pack.album)”"
         if !rejected.isEmpty {
             // Named, not just counted: which asset Photos refused is the
@@ -201,6 +213,9 @@ final class LoaderModel: ObservableObject {
                     let r = Receipt(jobId: job)
                     removed += try await writer.delete(identifiers: r.identifiers)
                     r.clear()
+                    let jobToken = UserDefaults.standard
+                        .string(forKey: "token-\(job)") ?? code
+                    await Custody.forget(base: baseURL, token: jobToken)
                 }
                 status = "Removed \(removed) assets"
                 detail = ""

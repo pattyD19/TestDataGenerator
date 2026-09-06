@@ -72,23 +72,49 @@ class MediaWriter(private val context: Context) {
     }
 
     /**
-     * Delete assets this app wrote. Returns how many rows actually went.
+     * Delete assets this app wrote. Returns the URIs it could **not** remove.
      *
-     * No RecoverableSecurityException handling and no createDeleteRequest: those
-     * are for files the app does not own. Ours it does, so this is a plain
-     * delete with no user prompt — which is what makes wipe usable daily.
+     * While the app still owns them this is a plain delete with no prompt,
+     * which is what makes wipe usable daily. **Ownership is not forever.**
+     * Uninstalling the app clears `owner_package_name` on every row it created,
+     * so a reinstalled app — the exact case receipt recovery exists for — is no
+     * longer the owner. MediaStore then quietly deletes nothing: no exception,
+     * no permission error, just a return of 0. Measured on a Galaxy S24: 169
+     * assets, "Removed 0 of 169", every row still there with a null owner.
+     *
+     * So what comes back is the work still to do: those URIs need
+     * [deleteRequest] and the user's consent, not a retry.
+     *
+     * Detecting this by *querying* for surviving rows does not work, and that
+     * mistake is worth recording: an app that may not delete unowned media may
+     * not read it either, so the query returns nothing and the wipe concludes
+     * it succeeded. The delete's own return value is the only honest signal.
      */
-    fun delete(uris: List<String>): Int {
-        var gone = 0
+    fun delete(uris: List<String>): List<Uri> {
+        val refused = ArrayList<Uri>()
         for (s in uris) {
+            val uri = Uri.parse(s)
             try {
-                if (resolver.delete(Uri.parse(s), null, null) > 0) gone++
+                if (resolver.delete(uri, null, null) == 0) refused.add(uri)
             } catch (e: Exception) {
-                // Someone deleted it in the gallery first. Not an error.
+                refused.add(uri)
             }
         }
-        return gone
+        return refused
     }
+
+    /**
+     * Ask the system to delete media this app does not own.
+     *
+     * `createDeleteRequest` is the supported route since API 30 — which is this
+     * app's minSdk, so no version guard. It shows one system dialog naming the
+     * count and, on the user's confirmation, deletes the lot regardless of
+     * owner. It cannot be launched from a Service: an IntentSender needs an
+     * Activity, which is why the wipe hands this back to MainActivity rather
+     * than finishing in the foreground service.
+     */
+    fun deleteRequest(uris: List<Uri>): android.content.IntentSender =
+        MediaStore.createDeleteRequest(resolver, uris).intentSender
 
     /**
      * The distinct folders these assets live in, read from MediaStore.
@@ -98,7 +124,7 @@ class MediaWriter(private val context: Context) {
      * recording it in the receipt: it stays correct when a manifest names a
      * custom album, and needs no receipt-format change.
      */
-    fun foldersOf(uris: List<String>): Set<String> {
+    fun foldersOf(uris: List<String>, fallback: String? = null): Set<String> {
         val out = LinkedHashSet<String>()
         val cols = arrayOf(MediaStore.MediaColumns.RELATIVE_PATH)
         for (s in uris) {
@@ -110,6 +136,10 @@ class MediaWriter(private val context: Context) {
                 // Already gone, or never ours. Nothing to clean up either way.
             }
         }
+        // Reading RELATIVE_PATH needs read access, which is exactly what an
+        // uninstall took away — so a recovered wipe learns nothing here and
+        // falls back to the album name the pack was written under.
+        if (out.isEmpty() && fallback != null) out.add(fallback)
         return out
     }
 

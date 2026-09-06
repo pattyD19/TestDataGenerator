@@ -40,6 +40,10 @@ class LoaderService : Service() {
         const val ACTION_STOP = "com.tdg.loader.STOP"
         const val EXTRA_MANIFEST_URL = "manifest_url"
         const val EXTRA_JOB_ID = "job_id"
+        // The control plane address and this pack's pairing code, carried so
+        // the receipt can be deposited with it — see Custody.
+        const val EXTRA_HOST = "host"
+        const val EXTRA_TOKEN = "token"
 
         /** Progress, broadcast locally so the activity can render it. */
         const val BROADCAST = "com.tdg.loader.PROGRESS"
@@ -56,6 +60,8 @@ class LoaderService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val cancelled = AtomicBoolean(false)
     private var worker: Job? = null
+    private var host = ""
+    private var token = ""
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -83,6 +89,8 @@ class LoaderService : Service() {
         if (worker?.isActive == true) return
         val jobId = intent?.getStringExtra(EXTRA_JOB_ID) ?: return stopSelf()
         val manifestUrl = intent.getStringExtra(EXTRA_MANIFEST_URL)
+        host = intent.getStringExtra(EXTRA_HOST).orEmpty()
+        token = intent.getStringExtra(EXTRA_TOKEN).orEmpty()
         cancelled.set(false)
         running = true
         startForeground(NOTIFICATION_ID, notification("Starting", 0, 0))
@@ -133,6 +141,7 @@ class LoaderService : Service() {
         }
 
         if (pending.isEmpty()) {
+            Custody.deposit(this, host, token, receipt)
             report("done", pack.totalBytes, pack.totalBytes, receipt.count,
                 pack.fileCount, "Already loaded")
             return
@@ -143,6 +152,9 @@ class LoaderService : Service() {
         val already = receipt.count
         for (item in pending) {
             if (cancelled.get()) {
+                // Assets already landed are on the device whether the run
+                // finished or not, so the backup has to be taken here too.
+                Custody.deposit(this, host, token, receipt)
                 report("cancelled", done, need, files, pending.size,
                     "Cancelled — reopen to resume")
                 return
@@ -155,6 +167,7 @@ class LoaderService : Service() {
             updateNotification(note, done, need)
             report("running", done, need, already + files, pack.fileCount, note)
         }
+        Custody.deposit(this, host, token, receipt)
         report("done", done, need, receipt.count, pack.fileCount,
             "${receipt.count} files in the gallery")
     }
@@ -199,9 +212,22 @@ class LoaderService : Service() {
         val writer = MediaWriter(this)
         val uris = receipt.uris()
         // Where they live has to be read before the rows are deleted.
-        val folders = writer.foldersOf(uris)
-        val gone = writer.delete(uris)
+        val folders = writer.foldersOf(uris, "DCIM/TDG $jobId")
+        val refused = writer.delete(uris)
+        val gone = total - refused.size
+
+        // A plain delete only works on media this app still owns, and an
+        // uninstall clears that ownership without clearing the assets. What
+        // it refuses is not an error and not a retry — it needs the user's
+        // consent through a system dialog, which only an Activity can show.
+        if (refused.isNotEmpty()) {
+            report("consent", 0, 0, gone, total,
+                "${refused.size} of $total need your confirmation to remove", jobId)
+            return                      // receipt stays: the assets are still there
+        }
+
         receipt.clear()
+        Custody.forget(this, host, token)
         writer.removeEmptyFolders(folders)
         report("done", 0, 0, 0, total, "Removed $gone of $total")
     }
@@ -209,9 +235,10 @@ class LoaderService : Service() {
     // -- reporting ----------------------------------------------------------
 
     private fun report(state: String, done: Long, total: Long, files: Int,
-                       of: Int, message: String) {
+                       of: Int, message: String, jobId: String? = null) {
         sendBroadcast(Intent(BROADCAST).apply {
             setPackage(packageName)
+            if (jobId != null) putExtra(EXTRA_JOB_ID, jobId)
             putExtra(EXTRA_STATE, state)
             putExtra(EXTRA_DONE, done)
             putExtra(EXTRA_TOTAL, total)

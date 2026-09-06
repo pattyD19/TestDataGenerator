@@ -30,6 +30,28 @@ CREATE TABLE IF NOT EXISTS jobs (
     started_at    REAL,
     finished_at   REAL
 );
+
+-- A copy of what a loader wrote onto a device.
+--
+-- The device holds the authoritative receipt; this is the backup that makes
+-- the wipe promise survive the app. Uninstall the loader, reset the phone, or
+-- lose the app any other way, and the localIdentifiers or content URIs that
+-- name 64 GB of assets are gone with it — the media stays, and nothing can
+-- name it precisely enough to remove it. "A test you cannot undo is a test you
+-- run once" only holds if the receipt outlives the app that wrote it.
+--
+-- Keyed on (job, device) because one pack can be loaded onto several handsets
+-- and each carries its own set of handles.
+CREATE TABLE IF NOT EXISTS receipts (
+    job          TEXT NOT NULL,       -- jobs.id
+    device       TEXT NOT NULL,       -- stable per-device id from the loader
+    platform     TEXT,                -- android | ios | cli
+    device_name  TEXT,                -- human-readable, for choosing between them
+    entries      TEXT NOT NULL,       -- JSON {file name: device-side handle}
+    count        INTEGER NOT NULL,
+    updated_at   REAL NOT NULL,
+    PRIMARY KEY (job, device)
+);
 """
 
 # `pruned` is terminal like `done`, but means the row outlived its pack: the
@@ -128,12 +150,93 @@ class Store:
         return self.get(jid)
 
     def delete(self, jid):
-        """Forget a job entirely. The caller removes its pack first — see
-        tdgweb.prune, which owns that order."""
+        """Forget a job entirely, receipts included. The caller removes its pack
+        first — see tdgweb.prune, which owns that order.
+
+        Dropping the receipts here is deliberate and is why the API refuses to
+        delete a job any device still carries unless forced: this is the one
+        operation that can strand assets on a phone with nothing left to name
+        them. Prune, the routine way to reclaim disk, never touches them.
+        """
         with self._lock:
+            self._db.execute("DELETE FROM receipts WHERE job = ?", (jid,))
             cur = self._db.execute("DELETE FROM jobs WHERE id = ?", (jid,))
             self._db.commit()
         return cur.rowcount > 0
+
+    # -- receipts -----------------------------------------------------------
+
+    def save_receipt(self, job, device, entries, platform=None, device_name=None):
+        """Upsert one device's receipt for one job.
+
+        Whole-receipt replacement rather than per-entry merge: the device is
+        the source of truth and always sends its complete record, so a partial
+        write here could only ever be a worse copy of it.
+        """
+        rec = {
+            "job": job, "device": device,
+            "platform": platform, "device_name": device_name,
+            "entries": json.dumps(entries),
+            "count": len(entries),
+            "updated_at": time.time(),
+        }
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO receipts (job, device, platform, device_name, entries,"
+                " count, updated_at) VALUES (:job,:device,:platform,:device_name,"
+                ":entries,:count,:updated_at) "
+                "ON CONFLICT(job, device) DO UPDATE SET "
+                "platform=excluded.platform, device_name=excluded.device_name,"
+                "entries=excluded.entries, count=excluded.count,"
+                "updated_at=excluded.updated_at", rec)
+            self._db.commit()
+        return self.get_receipt(job, device)
+
+    def get_receipt(self, job, device):
+        with self._lock:
+            cur = self._db.execute(
+                "SELECT * FROM receipts WHERE job = ? AND device = ?", (job, device))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["entries"] = json.loads(d["entries"])
+        return d
+
+    def list_receipts(self, job):
+        """Every device carrying this pack — without the entries, which can be
+        hundreds of kilobytes and are not needed to choose between them."""
+        with self._lock:
+            cur = self._db.execute(
+                "SELECT job, device, platform, device_name, count, updated_at "
+                "FROM receipts WHERE job = ? ORDER BY updated_at DESC", (job,))
+            return [dict(r) for r in cur.fetchall()]
+
+    def delete_receipt(self, job, device):
+        """Called when a device reports it has wiped. The record is only useful
+        while assets are still on the device."""
+        with self._lock:
+            cur = self._db.execute(
+                "DELETE FROM receipts WHERE job = ? AND device = ?", (job, device))
+            self._db.commit()
+        return cur.rowcount > 0
+
+    def receipt_counts(self):
+        """job id -> devices carrying it, for the job list.
+
+        One grouped query rather than a COUNT per row: the list is polled every
+        few seconds and most jobs have no receipts at all.
+        """
+        with self._lock:
+            cur = self._db.execute(
+                "SELECT job, COUNT(*) AS n FROM receipts GROUP BY job")
+            return {r["job"]: r["n"] for r in cur.fetchall()}
+
+    def count_receipts(self, job):
+        with self._lock:
+            cur = self._db.execute(
+                "SELECT COUNT(*) FROM receipts WHERE job = ?", (job,))
+            return cur.fetchone()[0]
 
     def reap_running(self):
         """Mark jobs that were mid-build when the server died.

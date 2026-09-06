@@ -135,6 +135,25 @@ case separate from an unreachable host — "could not find that pack" would
 contradict a 410, which says precisely where the pack went and that rebuilding
 it will bring it back.
 
+**The receipt is also deposited with the control plane**, because app storage
+does not survive the app. Deleting the loader destroys the only record of which
+`PHAsset`s it created while leaving all of them in the library. After a fill the
+app POSTs a copy to `/api/receipts`, and pairing again on a fresh install
+recovers it.
+
+The device id for that is a UUID in the **keychain**, deliberately not
+`identifierForVendor` — the latter is reset when the last app from a vendor is
+deleted, which is exactly the event being survived. Keychain items outlive an
+uninstall and are cleared by erasing the device, which takes the assets anyway.
+
+**Verified on hardware 2026-09-06**: 169 assets filled, the app deleted, then
+reinstalled — and pairing restored a receipt identical to the server's copy key
+for key, every `PHAsset` localIdentifier included. The wipe then removed all 169
+and withdrew the server copy. Unlike Android, this needed no extra permission
+step: Photos has no per-app asset ownership, so the identity recovery restores
+is enough on its own. Full results in
+[`docs/conformance/iphone-15-pro-receipt-custody.md`](../../docs/conformance/iphone-15-pro-receipt-custody.md).
+
 **A receipt per job**, written atomically, keyed on the `PHAsset`
 **localIdentifier**. Photos renames every imported asset to `IMG_NNNN`, so a
 filename-keyed wipe would find nothing; the identifier is also exactly what

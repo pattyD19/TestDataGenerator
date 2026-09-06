@@ -544,6 +544,35 @@ For an Android *emulator* rather than a handset, `adb reverse tcp:8722
 tcp:8722` makes the host's port reachable at `http://localhost:8722` inside the
 emulator.
 
+### I uninstalled the app. Can I still remove what it put on the phone?
+
+Yes, as long as you can reach the same control plane.
+
+The receipt on the device is what makes a wipe exact, and app storage does not
+survive the app — so the loader also deposits a copy with the control plane when
+a fill finishes. Reinstall it, type the same six-digit code, and it recovers the
+receipt and offers to remove what is already there. Recovery works even if the
+pack itself has been pruned, which is the usual state by the time anyone needs
+it.
+
+**On iOS it just works** — Photos has no per-app ownership of an asset, so the
+recovered receipt is enough to remove them (you still get the usual full-access
+prompt and the system's confirmation of the count, as any wipe does).
+
+**On Android it will ask you once.** Uninstalling an app clears Android's record
+of which media it owned, so the reinstalled app is no longer allowed to delete
+what it wrote. It recovers the receipt, works out exactly what is still there,
+and asks the system for permission — you get one dialog naming the count
+("Allow TDG Loader to delete 169 photos?"). Confirm it and everything goes. The
+everyday wipe, where the app still owns its media, stays promptless.
+
+Two other limits worth knowing. The copy lives with the control plane that
+filled the device, so pointing the app at a different server, or losing the jobs
+database, loses the backup. And **deleting a job** (not pruning it) discards the stored
+receipts along with the row — which is why the API refuses to delete a job any
+device is still carrying unless you force it. Prune reclaims the same disk and
+keeps them.
+
 ### The app says the pack was pruned.
 
 It was — its media has been reclaimed to free disk. The job row survives, so

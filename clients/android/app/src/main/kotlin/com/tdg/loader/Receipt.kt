@@ -30,6 +30,22 @@ class Receipt(context: Context, val jobId: String) {
 
     fun uris(): List<String> = entries.values.toList()
 
+    /** name -> content URI, for depositing a copy with the control plane. */
+    fun entries(): Map<String, String> = LinkedHashMap(entries)
+
+    /**
+     * Take on a receipt recovered from the control plane.
+     *
+     * Only meaningful on an empty receipt — a device that still has its own
+     * record is the authority, and overwriting it could only lose entries.
+     */
+    @Synchronized
+    fun adopt(recovered: Map<String, String>) {
+        if (entries.isNotEmpty() || recovered.isEmpty()) return
+        entries.putAll(recovered)
+        save()
+    }
+
     @Synchronized
     fun add(name: String, uri: String) {
         entries[name] = uri

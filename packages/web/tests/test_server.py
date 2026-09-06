@@ -326,6 +326,54 @@ def main():
     _, still, _ = req("/api/jobs")
     check(len(still) >= 2, "the job history survives the packs")
 
+    print("receipt custody: the wipe promise has to outlive the app")
+    entries = {"TDG_x_00000.jpg": "content://media/external/images/media/1",
+               "TDG_x_00001.jpg": "content://media/external/images/media/2"}
+    code, _, _ = req("/api/receipts", "POST",
+                     {"device": "d1", "entries": entries})
+    check(code == 401, "depositing a receipt without a pairing code is refused")
+    code, _, _ = req(f"/api/receipts?token={token}", "POST",
+                     {"entries": entries})
+    check(code == 400, "and a deposit with no device id is rejected")
+    code, _, _ = req(f"/api/receipts?token={token}", "POST",
+                     {"device": "d1", "entries": ["not", "a", "map"]})
+    check(code == 400, "entries must be a name -> handle map")
+
+    code, dep, _ = req(f"/api/receipts?token={token}", "POST",
+                       {"device": "d1", "platform": "android",
+                        "device_name": "Galaxy S24", "entries": entries})
+    check(code == 201 and dep["count"] == 2, "a loader can deposit its receipt")
+    code, got, _ = req(f"/api/receipts?token={token}&device=d1")
+    check(code == 200 and got["entries"] == entries,
+          "and read back exactly what it wrote — which is what a reinstalled app needs")
+    code, lst, _ = req(f"/api/receipts?token={token}")
+    check(code == 200 and len(lst["devices"]) == 1 and
+          lst["devices"][0]["device_name"] == "Galaxy S24",
+          "the pack lists the devices carrying it, by a name a human can pick from")
+    check("entries" not in lst["devices"][0],
+          "without the entries, which can be hundreds of kilobytes")
+    code, _, _ = req(f"/api/receipts?token={token}&device=nosuch")
+    check(code == 404, "an unknown device is 404, not an empty receipt")
+
+    # The whole point: this is the state the hole appears in.
+    code, _, _ = req(f"/api/jobs/{jid}/prune", "POST")
+    check(code == 200, "the pack is pruned away")
+    code, after, _ = req(f"/api/receipts?token={token}&device=d1")
+    check(code == 200 and after["entries"] == entries,
+          "and the receipt survives it — a device stays wipeable after its pack is gone")
+    code, paired, _ = req(f"/api/pair/{token}")
+    check(code == 410, "pairing with a pruned pack still refuses")
+    check(after["count"] == 2,
+          "yet recovery works anyway, which is the situation it exists for")
+
+    code, refused, _ = req(f"/api/jobs/{jid}", "DELETE")
+    check(code == 409 and "still carry" in refused.get("error", ""),
+          "deleting a job a device still carries is refused, and says why")
+    code, _, _ = req(f"/api/receipts?token={token}&device=d1", "DELETE")
+    check(code == 200, "a device that has wiped can forget its receipt")
+    code, _, _ = req(f"/api/receipts?token={token}&device=d1")
+    check(code == 404, "after which there is nothing left to recover")
+
     code, out, _ = req(f"/api/jobs/{jid}", "DELETE")
     check(code == 200 and out["row"] == "deleted", "delete removes the row as well")
     code, _, _ = req(f"/api/jobs/{jid}")
