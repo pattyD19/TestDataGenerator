@@ -52,6 +52,10 @@ one that cannot work. Keychain items outlive an app deletion, and the recovery
 above is the evidence: the reinstalled app asked the control plane for the same
 `B3B016D6-…` it had deposited under, and matched.
 
+**Repeated on iOS 27** on 2026-09-15, with the same result and no code changes —
+the same keychain id resolved after a third app deletion and a major OS upgrade.
+See [the iOS 27 custody run](iphone-15-pro-ios-27-custody.md).
+
 ## What this run does not tell you
 
 - **Deleting the app resets developer trust.** The reinstalled build would not

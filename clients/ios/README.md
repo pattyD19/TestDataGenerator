@@ -165,6 +165,13 @@ Volume was repeated too: **900 assets in 83 s (~25.9 MB/s)** against ~110 s on
 each way on uncontrolled Wi-Fi, so read it as "27 did not make it slower"
 rather than as a benchmark.
 
+The delete-and-recover cycle was repeated too, and passed first time: the app
+deleted, reinstalled, and the receipt restored **identical to the server's copy
+key for key**, with exactly one file re-fetched — the zero-byte edge case the
+receipt cannot contain. The wipe then removed all 60 using identifiers the app
+had never recorded itself
+([record](../../docs/conformance/iphone-15-pro-ios-27-custody.md)).
+
 One toolchain change: `simctl privacy grant photos` now pre-authorises full
 library access on a simulator, which it did not on 26. The delete confirmation
 still needs a tap, on both simulator and device.
