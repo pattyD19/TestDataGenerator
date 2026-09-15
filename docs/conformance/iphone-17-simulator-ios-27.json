@@ -1,0 +1,27 @@
+{
+  "job_id": "b2f8fe",
+  "target": "simulator",
+  "device": "CBD7A532-8A2B-4680-A107-E7469790DFF0",
+  "verified_at": "2026-09-15T22:29:52+00:00",
+  "expected_files": 60,
+  "expected_refusals": [
+    "TDG_b2f8fe_00010.jpg"
+  ],
+  "expected_bytes": 157286400,
+  "photo_count": 60,
+  "video_count": 1,
+  "indexed": 60,
+  "missing": [],
+  "capture_time_preserved": 60,
+  "dated_assets": 60,
+  "undated_assets": [],
+  "worst_delta_seconds": 0.0,
+  "album": "TDG b2f8fe",
+  "album_supported": true,
+  "album_note": null,
+  "expected_album": "TDG b2f8fe",
+  "matched_by": "instant",
+  "elapsed_seconds": 0.0,
+  "throughput_bytes_per_second": null,
+  "passed": true
+}

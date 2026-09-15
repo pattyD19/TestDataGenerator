@@ -22,6 +22,7 @@ A **physical iPhone has no equivalent**: the Photos database is not reachable
 from outside the app, so verification there has to come from the loader app
 itself. That gap is real and is reported rather than papered over.
 """
+import bisect
 import datetime
 import json
 import os
@@ -186,17 +187,63 @@ def verify(pack_dir, target, device=None, receipt=None):
     want = _manifest_instants(doc)
     got = probe["indexed"]
 
+    # iOS refuses an asset with no bytes — PHAssetCreationRequest has no
+    # resource to validate, which is correct and is exactly what the edge-case
+    # pack exists to surface. Counting it as a lost file made every run with
+    # `--edge-cases` fail on iOS forever, which is a conformance gate that can
+    # never pass and so tells you nothing. Subtract it from what the device is
+    # expected to hold, and say so in the report. MediaStore accepts the same
+    # file, so on Android it stays expected.
+    refusals = []
+    if target == "simulator":
+        refusals = sorted(i["name"] for i in doc["items"] if not i.get("bytes"))
+        for n in refusals:
+            want.pop(n, None)
+    expected_files = doc["file_count"] - len(refusals)
+
     undated = sorted(n for n, v in got.items() if v is None)
     if probe["matched_by"] == "name":
         missing = sorted(set(want) - set(got))
         deltas = [abs((got[n] - want[n]).total_seconds())
                   for n in want if got.get(n) is not None]
     else:
-        # Compare sorted instants pairwise; names do not survive the import.
+        # Compare sorted instants; names do not survive the import.
+        #
+        # Pairing them positionally is wrong the moment one asset is legitimately
+        # absent — a zero-byte file, which iOS refuses and should refuse. Every
+        # instant after the gap then lines up against its neighbour and reports a
+        # capture time that was never wrong. On an iOS 27 simulator that turned a
+        # clean edge-case fill into "capture time preserved 30/60", worst delta
+        # 2.1 years, with nothing actually amiss.
+        #
+        # Both lists are sorted, so walk them together and match each found
+        # instant to the nearest expected one not already taken. A gap costs one
+        # expected entry and nothing else.
         w = sorted(want.values())
         g = sorted(v for v in got.values() if v is not None)
         missing = [f"{len(w) - len(g)} asset(s) unaccounted for"] if len(g) < len(w) else []
-        deltas = [abs((a - b).total_seconds()) for a, b in zip(g, w)]
+        keys = [x.timestamp() for x in w]
+        used = [False] * len(w)
+        deltas = []
+        for gv in g:
+            t = gv.timestamp()
+            k = bisect.bisect_left(keys, t)
+            best = span = None
+            # A burst puts several instants 380 ms apart, so the nearest entry
+            # may be either side of the insertion point and may already be
+            # taken. Widen until something unused is in reach.
+            for width in (4, 32, len(w)):
+                for c in range(max(0, k - width), min(len(w), k + width + 1)):
+                    if used[c]:
+                        continue
+                    d = abs(t - keys[c])
+                    if best is None or d < best:
+                        best, span = d, c
+                if best is not None:
+                    break
+            if span is not None:
+                used[span] = True
+                deltas.append(best)
 
     worst = max(deltas) if deltas else None
     preserved = sum(1 for d in deltas if d <= TOLERANCE_SECONDS)
@@ -208,7 +255,8 @@ def verify(pack_dir, target, device=None, receipt=None):
         "target": target,
         "device": device,
         "verified_at": _iso(datetime.datetime.now(datetime.timezone.utc)),
-        "expected_files": doc["file_count"],
+        "expected_files": expected_files,
+        "expected_refusals": refusals,
         "expected_bytes": doc["total_bytes"],
         "photo_count": doc.get("photo_count"),
         "video_count": doc.get("video_count"),
@@ -230,7 +278,7 @@ def verify(pack_dir, target, device=None, receipt=None):
         # time must have kept it. An asset with no EXIF — a screenshot, a
         # zero-byte file — has no capture time to lose, and failing the run
         # for that would be reporting normal platform behaviour as a defect.
-        "passed": (len(got) == doc["file_count"]
+        "passed": (len(got) == expected_files
                    and preserved == dated
                    and not missing),
     }
@@ -252,6 +300,9 @@ def summarise(r):
         f"  capture time preserved {r['capture_time_preserved']}/{r['dated_assets']}"
         + (f"   (worst delta {r['worst_delta_seconds']}s)" if r['worst_delta_seconds'] is not None else "")
         + f"   [{tick(dates_ok)}]"
+        + (f"\n  refused, as expected    {len(r['expected_refusals'])} zero-byte asset(s) — "
+           f"iOS has no resource to validate"
+           if r.get("expected_refusals") else "")
         + (f"\n  no capture time         {len(r['undated_assets'])} asset(s) carry no "
            f"EXIF date (a screenshot or an empty file has none)"
            if r["undated_assets"] else ""),
@@ -293,6 +344,9 @@ def markdown(r, label=None):
         f"{r['dated_assets']} dated"
         + (f", worst delta {r['worst_delta_seconds']}s" if r['worst_delta_seconds'] is not None else "")
         + f" | {ok(r['capture_time_preserved'] == r['dated_assets'])} |",
+        (f"| refused, as expected | {len(r['expected_refusals'])} zero-byte asset(s) — "
+         f"iOS has no resource to validate | expected |")
+        if r.get("expected_refusals") else None,
         (f"| assets with no capture time | {len(r['undated_assets'])} — no EXIF "
          f"date to carry | — |") if r["undated_assets"] else None,
         (f"| album grouping | {r['album']} | "

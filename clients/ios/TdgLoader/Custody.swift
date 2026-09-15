@@ -21,32 +21,67 @@ enum Custody {
 
     // MARK: a device id that outlives the app
 
-    /// `identifierForVendor` is exactly the wrong tool here: it is reset when
-    /// the last app from a vendor is deleted, which is precisely the event this
-    /// whole file exists to survive. Keychain items are not removed with the
-    /// app, so a UUID stored there is stable across a reinstall and is cleared
-    /// only by erasing the device — which takes the assets with it anyway.
-    static func deviceId() -> String {
-        let account = "tdg.device-id"
-        var query: [String: Any] = [
+    private static let account = "tdg.device-id"
+    private static var memo: String?
+
+    private static func keychainRead() -> String? {
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "com.tdg.loader",
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
         ]
         var item: CFTypeRef?
-        if SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-           let data = item as? Data, let existing = String(data: data, encoding: .utf8) {
-            return existing
-        }
-        let fresh = UUID().uuidString
-        query.removeValue(forKey: kSecReturnData as String)
-        query[kSecValueData as String] = Data(fresh.utf8)
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    @discardableResult
+    private static func keychainWrite(_ value: String) -> Bool {
+        let base: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.tdg.loader",
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(base as CFDictionary)
+        var add = base
+        add[kSecValueData as String] = Data(value.utf8)
         // AfterFirstUnlock so a fill that starts while the phone is locked can
         // still read it; the id is not a secret, only a stable name.
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemDelete(query as CFDictionary)
-        SecItemAdd(query as CFDictionary, nil)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+    }
+
+    /// `identifierForVendor` is exactly the wrong tool here: it is reset when
+    /// the last app from a vendor is deleted, which is precisely the event this
+    /// whole file exists to survive. Keychain items are not removed with the
+    /// app, so a UUID stored there is stable across a reinstall and is cleared
+    /// only by erasing the device — which takes the assets with it anyway.
+    static func deviceId() -> String {
+        if let memo { return memo }
+        if let existing = keychainRead() { memo = existing; return existing }
+
+        let fresh = UUID().uuidString
+        // The write has to be *checked*, not fired and forgotten. An unsigned
+        // simulator build carries no keychain-access-group entitlement, so
+        // SecItemAdd fails; ignoring that returned a brand-new UUID on every
+        // call, and the deposit, the recovery and the withdrawal each went out
+        // under a different device. Nothing errored — the server simply had no
+        // row matching the id being asked about.
+        if keychainWrite(fresh), keychainRead() == fresh {
+            memo = fresh
+            return fresh
+        }
+
+        // No keychain. UserDefaults still gives one id per install, which keeps
+        // deposit, recovery and withdrawal agreeing with each other. What it
+        // cannot do is survive the app being deleted — so recovery after a
+        // delete works on a signed device build and not in the simulator.
+        let store = UserDefaults.standard
+        if let prior = store.string(forKey: account) { memo = prior; return prior }
+        store.set(fresh, forKey: account)
+        memo = fresh
         return fresh
     }
 

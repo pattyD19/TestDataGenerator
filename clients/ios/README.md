@@ -146,6 +146,23 @@ The device id for that is a UUID in the **keychain**, deliberately not
 deleted, which is exactly the event being survived. Keychain items outlive an
 uninstall and are cleared by erasing the device, which takes the assets anyway.
 
+**iOS 27 (2026-09-15):** re-certified on both a simulator and the physical
+iPhone 15 Pro, with **no code changes needed**. Builds against the iOS 27 SDK —
+the only iOS SDK Xcode 27 ships — cleanly. The simulator indexed 60/60 with
+capture times exact to 0.0 s
+([record](../../docs/conformance/iphone-17-simulator-ios-27.md)); the handset
+took 60/60 with a receipt identical to the server's, key for key
+([record](../../docs/conformance/iphone-15-pro-physical-ios-27.md)).
+
+The result worth keeping from that: the keychain device id came back **identical
+to the one recorded on 2026-09-06**, having survived an app deletion, a
+reinstall, the 26 → 27 upgrade, and a reissued provisioning profile. Choosing the
+keychain over `identifierForVendor` was reasoning then; it is measured now.
+
+One toolchain change: `simctl privacy grant photos` now pre-authorises full
+library access on a simulator, which it did not on 26. The delete confirmation
+still needs a tap, on both simulator and device.
+
 **Verified on hardware 2026-09-06**: 169 assets filled, the app deleted, then
 reinstalled — and pairing restored a receipt identical to the server's copy key
 for key, every `PHAsset` localIdentifier included. The wipe then removed all 169
@@ -207,7 +224,13 @@ and the [900-asset run](../../docs/conformance/iphone-15-pro-physical-900-assets
   hardware, so the device run was checked by pulling the loader's own receipt off
   the phone with `devicectl` rather than by querying the Photos database.
 - **iOS 17 floor is declared, not verified.** `IPHONEOS_DEPLOYMENT_TARGET` is
-  17.0 but the runs are on 26.5 and 26.6.1.
+  17.0 but the runs are on 26.5, 26.6.1 and 27.0.
+- **Receipt recovery cannot be tested on a simulator.** The device id lives in
+  the keychain, and an unsigned simulator build has no keychain-access-group
+  entitlement, so it falls back to `UserDefaults` — one id per install, which
+  keeps deposit, recovery and withdrawal agreeing but does not survive the app
+  being deleted. The signed device build has the entitlement and does; see the
+  [iPhone 15 Pro custody record](../../docs/conformance/iphone-15-pro-receipt-custody.md).
 - **Deleted assets go to Recently Deleted for 30 days.** Space is not reclaimed
   immediately, which matters when the point of the exercise was filling a device.
 - **Resume is per-file, not per-byte.** A killed transfer re-fetches the file it
