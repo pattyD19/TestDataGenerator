@@ -159,6 +159,12 @@ to the one recorded on 2026-09-06**, having survived an app deletion, a
 reinstall, the 26 → 27 upgrade, and a reissued provisioning profile. Choosing the
 keychain over `identifierForVendor` was reasoning then; it is measured now.
 
+Volume was repeated too: **900 assets in 83 s (~25.9 MB/s)** against ~110 s on
+26.6.1, using the same pack rebuilt byte for byte from its pruned job —
+[record](../../docs/conformance/iphone-15-pro-ios-27-900-assets.md). One run
+each way on uncontrolled Wi-Fi, so read it as "27 did not make it slower"
+rather than as a benchmark.
+
 One toolchain change: `simctl privacy grant photos` now pre-authorises full
 library access on a simulator, which it did not on 26. The delete confirmation
 still needs a tap, on both simulator and device.

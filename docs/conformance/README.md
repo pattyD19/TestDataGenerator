@@ -29,6 +29,7 @@ The plan calls for six devices. Four are covered — two emulated, plus a **phys
 | [**iPhone 15 Pro, receipt custody**](iphone-15-pro-receipt-custody.md) | **the same, on iOS** — keychain device id survived deletion; recovered identifiers matched the server exactly | **passed** |
 | [**iPhone 17 simulator, iOS 27.0**](iphone-17-simulator-ios-27.md) | **the OS upgrade** — clean build on the 27 SDK, 60/60 indexed, capture times exact; found two bugs of our own | **passed** |
 | [**iPhone 15 Pro (physical), iOS 27.0**](iphone-15-pro-physical-ios-27.md) | **re-certified on hardware** — 60/60, receipt identical to the server, and the keychain id survived the OS upgrade | **passed** |
+| [**iPhone 15 Pro, 900 assets on iOS 27**](iphone-15-pro-ios-27-900-assets.md) | **volume, repeated after the upgrade** — same pack rebuilt from its pruned job; 83 s vs ~110 s on 26.6.1 | **passed** |
 | [**Galaxy S24 (physical), Android 16**](galaxy-s24-physical-android-16.md) | **real hardware** — One UI, Samsung Gallery, 144/144 indexed | **passed** |
 | [**Galaxy S24, 10 GB on battery, screen off**](galaxy-s24-physical-10gb-battery.md) | **the battery-manager risk** — 3,466 assets, 15 min, service never suspended | **passed** |
 | Current Pixel (physical) | AOSP reference on real hardware | not run — no device |

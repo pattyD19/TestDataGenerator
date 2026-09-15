@@ -72,6 +72,9 @@ The `--` matters: without it `devicectl` reads `-host` as its own option.
   scripted, so unattended *fills* are possible and unattended *wipes* are not.
 - **It is stills only.** 900 JPEGs is not 900 mixed assets; video goes through
   the same `PHAssetCreationRequest` path but is not exercised here at volume.
+- **Repeated on iOS 27**, with the same pack rebuilt from this job after it was
+  pruned: 900/900 again, in 83 s rather than ~110 s. See
+  [the iOS 27 run](iphone-15-pro-ios-27-900-assets.md).
 - **It is 2 GB, not 64 GB.** A full-device fill is 30× this and would run for
   the better part of an hour, which is the multi-hour battery question the
   Galaxy S24 answered for Android and nothing has answered for iOS.
